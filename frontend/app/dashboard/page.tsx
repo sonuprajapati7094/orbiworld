@@ -32,6 +32,7 @@ type Section =
   | "earnings"
   | "business"
   | "referral"
+  | "level-income"
   | "rank"
   | "royalty"
   | "withdrawal"
@@ -327,6 +328,11 @@ const MAIN_NAV: {
     id: "referral",
     label: "Referral Center",
     icon: "↗",
+  },
+   {
+    id: "level-income",
+    label: "Level Income",
+    icon: "◉",
   },
   {
     id: "rank",
@@ -2427,6 +2433,9 @@ function titleFor(
 
     referral:
       "Referral Center",
+
+      "level-income":
+  "Level Income",
 
     rank:
       "Rank Center",
