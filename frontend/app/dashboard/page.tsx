@@ -98,8 +98,19 @@ type PackageRow = {
   amount: ethers.BigNumber;
   block: number;
   tx: string;
+  startTime: number;
+  roiPaid: ethers.BigNumber;
   closed: boolean;
   closeStatus?: number;
+};
+
+type AutomationStatus = {
+  enabled: boolean;
+  hasRole: boolean;
+  batchSize: ethers.BigNumber;
+  lastProcessingDay: ethers.BigNumber;
+  currentDay: ethers.BigNumber;
+  processedToday: boolean;
 };
 
 type WithdrawalRow = {
@@ -159,6 +170,16 @@ const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero;
 const ACCESS_CONTROL_ABI = [
   "function hasRole(bytes32 role,address account) view returns (bool)",
 ];
+
+const AUTOMATION_ABI = [
+  "function s_automationConfig() view returns (uint256 batchSize,bool automationEnabled)",
+  "function s_automationState() view returns (uint256 processingPointer,uint256 activePackageCount,uint256 lastProcessingDay,uint16 currentMonth,uint16 currentYear)",
+  "function hasRole(bytes32 role,address account) view returns (bool)",
+];
+
+const AUTOMATION_ROLE = ethers.utils.keccak256(
+  ethers.utils.toUtf8Bytes("AUTOMATION_ROLE")
+);
 
 const RANKS = [
   {
@@ -427,6 +448,9 @@ export default function DashboardPage() {
   const [packages, setPackages] =
     useState<PackageRow[]>([]);
 
+  const [automationStatus, setAutomationStatus] =
+    useState<AutomationStatus | null>(null);
+
   const [withdrawals, setWithdrawals] =
     useState<WithdrawalRow[]>([]);
 
@@ -522,6 +546,7 @@ export default function DashboardPage() {
     setProfile(null);
 
     setPackages([]);
+    setAutomationStatus(null);
     setWithdrawals([]);
     setRankHistory([]);
     setRoyaltyHistory([]);
@@ -781,22 +806,29 @@ export default function DashboardPage() {
         /*
          * Bounded range to avoid huge RPC requests.
          */
-        const fromBlock =
+        const historyFromBlock =
           Math.max(0, latest - 50000);
 
+        /*
+         * PackageActivated has indexed userId, so we can safely
+         * scan from deployment history for this user's packages.
+         * This fixes older packages disappearing from the UI.
+         */
+        const packageFromBlock = 0;
+
         const query = async (
-          filter: any
+          filter: any,
+          startBlock = historyFromBlock
         ) => {
           return c.queryFilter(
             filter,
-            fromBlock,
+            startBlock,
             latest
           );
         };
 
         const [
           activated,
-          topups,
           closed,
           requested,
           approved,
@@ -810,11 +842,8 @@ export default function DashboardPage() {
               null,
               p.id,
               null
-            )
-          ),
-
-          query(
-            c.filters.PackageTopup(null)
+            ),
+            packageFromBlock
           ),
 
           query(
@@ -822,7 +851,8 @@ export default function DashboardPage() {
               null,
               p.id,
               null
-            )
+            ),
+            packageFromBlock
           ),
 
           query(
@@ -911,42 +941,18 @@ export default function DashboardPage() {
               event.blockNumber,
             tx:
               event.transactionHash,
+            startTime: 0,
+            roiPaid: ZERO,
             closed: false,
           });
         }
 
         /*
-         * PackageTopup does not contain userId.
-         * We add the top-up amount to the package
-         * only when that package already belongs
-         * to the current user's activated package list.
+         * The deployed contract's PackageTopup event does not include
+         * userId, and topUp creates a NEW package. We therefore do not
+         * merge those events into an existing package row here.
+         * The first/active package is reconstructed from PackageActivated.
          */
-        for (
-          const event of topups as any[]
-        ) {
-          const args =
-            event.args;
-
-          const id =
-            bn(
-              args.packageId ??
-                args[0]
-            ).toString();
-
-          const amount =
-            bn(
-              args.amount ??
-                args[1]
-            );
-
-          const row =
-            packageMap.get(id);
-
-          if (row) {
-            row.amount =
-              row.amount.add(amount);
-          }
-        }
 
         for (
           const event of closed as any[]
@@ -975,15 +981,131 @@ export default function DashboardPage() {
           }
         }
 
+        /*
+         * DAILY ROI EVENTS
+         *
+         * DailyROIProcessed is indexed by packageId, so after we know
+         * this user's package IDs we query only those packages.
+         */
+        const packageRows =
+          Array.from(packageMap.values());
+
+        await Promise.all(
+          packageRows.map(
+            async (row) => {
+              const [
+                roiLogs,
+                blockData,
+              ] = await Promise.all([
+                c.queryFilter(
+                  c.filters.DailyROIProcessed(
+                    row.packageId
+                  ),
+                  packageFromBlock,
+                  latest
+                ),
+                c.provider.getBlock(
+                  row.block
+                ),
+              ]);
+
+              row.roiPaid =
+                (roiLogs as any[]).reduce(
+                  (
+                    total,
+                    event
+                  ) =>
+                    total.add(
+                      bn(
+                        event.args
+                          ?.roiAmount ??
+                          event.args?.[1] ??
+                          0
+                      )
+                    ),
+                  ZERO
+                );
+
+              row.startTime =
+                Number(
+                  blockData?.timestamp ??
+                    0
+                );
+            }
+          )
+        );
+
         setPackages(
-          Array.from(
-            packageMap.values()
-          ).sort(
+          packageRows.sort(
             (a, b) =>
               Number(b.packageId) -
               Number(a.packageId)
           )
         );
+
+        /*
+         * Automation diagnostics.
+         */
+        try {
+          const automation =
+            new ethers.Contract(
+              CONTRACT_ADDRESS,
+              AUTOMATION_ABI,
+              c.provider
+            );
+
+          const [
+            automationConfig,
+            automationState,
+            hasAutomationRole,
+          ] = await Promise.all([
+            automation.s_automationConfig(),
+            automation.s_automationState(),
+            automation.hasRole(
+              AUTOMATION_ROLE,
+              account
+            ),
+          ]);
+
+          const currentDay =
+            Math.floor(
+              Date.now() / 86400000
+            );
+
+          const lastProcessingDay =
+            bn(
+              automationState.lastProcessingDay ??
+                automationState[2]
+            );
+
+          setAutomationStatus({
+            enabled: Boolean(
+              automationConfig.automationEnabled ??
+                automationConfig[1]
+            ),
+            hasRole: Boolean(
+              hasAutomationRole
+            ),
+            batchSize: bn(
+              automationConfig.batchSize ??
+                automationConfig[0]
+            ),
+            lastProcessingDay,
+            currentDay: ethers.BigNumber.from(
+              currentDay
+            ),
+            processedToday:
+              lastProcessingDay.eq(
+                currentDay
+              ),
+          });
+        } catch (automationError) {
+          console.error(
+            "Automation status read failed:",
+            automationError
+          );
+          setAutomationStatus(null);
+        }
 
         /* =================================================
            WITHDRAWALS
@@ -2320,6 +2442,9 @@ export default function DashboardPage() {
             packages={
               packages
             }
+            automationStatus={
+              automationStatus
+            }
             withdrawals={
               withdrawals
             }
@@ -2609,6 +2734,7 @@ function DashboardContent(
     config,
     usdtBalance,
     packages,
+    automationStatus,
     withdrawals,
     rankHistory,
     royaltyHistory,
@@ -2670,6 +2796,7 @@ function DashboardContent(
             topUp
           }
           busy={busy}
+          automationStatus={automationStatus}
         />
       );
 
@@ -3246,6 +3373,7 @@ function Packages({
   activate,
   topUp,
   busy,
+  automationStatus,
 }: any) {
   return (
     <>
@@ -3283,6 +3411,31 @@ function Packages({
           title="Max Payout"
           value={`${MAX_MULTIPLIER}×`}
           sub="Per package"
+        />
+      </div>
+
+      <div className="grid four">
+        <Metric
+  title="Actual ROI Received"
+  value={`${money(
+    packages.reduce(
+      (
+        total: ethers.BigNumber,
+        item: PackageRow
+      ) =>
+        total.add(item.roiPaid),
+      ZERO
+    )
+  )} USDT`}
+  sub="From DailyROIProcessed events"
+/>
+
+        <Metric
+          title="Package Count"
+          value={String(
+            packages.length
+          )}
+          sub="Detected on-chain"
         />
       </div>
 
@@ -3338,62 +3491,115 @@ function Packages({
         </p>
       </Card>
 
-      <History
-        title="My Packages"
-        headers={[
-          "Package",
-          "Amount",
-          "Max Payout",
-          "Status",
-          "Block",
-          "Tx",
-        ]}
-      >
-        {packages.map(
-          (item: PackageRow) => (
-            <tr
-              key={
-                item.packageId
-              }
-            >
-              <td>
-                #
-                {
-                  item.packageId
-                }
-              </td>
+      {packages.map(
+        (item: PackageRow) => {
+          const target =
+            item.amount.mul(
+              MAX_MULTIPLIER
+            );
 
-              <td>
-                {money(
-                  item.amount
-                )}{" "}
-                USDT
-              </td>
+          const dailyROI =
+            item.amount
+              .mul(config.roiBps)
+              .div(10000);
 
-              <td>
-                {money(
-                  item.amount.mul(
-                    MAX_MULTIPLIER
+          const progress =
+            target.gt(0)
+              ? Math.min(
+                  100,
+                  Number(
+                    item.roiPaid
+                      .mul(100)
+                      .div(target)
                   )
-                )}{" "}
-                USDT
-              </td>
+                )
+              : 0;
 
-              <td>
-                <Pill
+          const remaining =
+            target.gt(item.roiPaid)
+              ? target.sub(
+                  item.roiPaid
+                )
+              : ZERO;
+
+          const daysTo2x =
+            dailyROI.gt(0)
+              ? remaining
+                  .add(dailyROI)
+                  .sub(1)
+                  .div(dailyROI)
+                  .toNumber()
+              : 0;
+
+          return (
+            <div
+              key={item.packageId}
+              className="two"
+              style={{
+                marginTop: 18,
+              }}
+            >
+              <Card
+                title={`Staking Info • Package #${item.packageId}`}
+              >
+                <Row
+                  label="Staked"
+                  value={`${money(
+                    item.amount
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Target (2×)"
+                  value={`${money(
+                    target
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Daily ROI"
+                  value={`${(
+                    config.roiBps /
+                    100
+                  ).toFixed(2)}%`}
+                />
+
+                <Row
+                  label="ROI Received"
+                  value={`${money(
+                    item.roiPaid
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Days to 2×"
                   value={
                     item.closed
-                      ? "CLOSED"
-                      : "ACTIVE"
+                      ? "Completed"
+                      : `${daysTo2x} days`
                   }
                 />
-              </td>
 
-              <td>
-                {item.block}
-              </td>
+                <Row
+                  label="Package Status"
+                  value={
+                    item.closed
+                      ? "Closed"
+                      : "Active"
+                  }
+                />
 
-              <td>
+                <Progress
+                  label="Progress to 2×"
+                  value={progress}
+                />
+
+                <p className="muted">
+                  Progress and days-to-2× are
+                  calculated from actual
+                  DailyROIProcessed events.
+                </p>
+
                 <a
                   href={txUrl(
                     item.tx
@@ -3401,13 +3607,75 @@ function Packages({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  View
+                  View activation transaction ↗
                 </a>
-              </td>
-            </tr>
-          )
-        )}
-      </History>
+              </Card>
+
+              <Card title="ROI Automation">
+                {automationStatus ? (
+                  <>
+                    <Row
+                      label="Automation"
+                      value={
+                        automationStatus.enabled
+                          ? "Enabled"
+                          : "Disabled"
+                      }
+                    />
+
+                    <Row
+                      label="Automation Role"
+                      value={
+                        automationStatus.hasRole
+                          ? "Present"
+                          : "Not assigned"
+                      }
+                    />
+
+                    <Row
+                      label="Last Processing"
+                      value={
+                        automationStatus.processedToday
+                          ? "Processed today"
+                          : "Not processed today"
+                      }
+                    />
+
+                    <Row
+                      label="Batch Size"
+                      value={automationStatus.batchSize.toString()}
+                    />
+
+                    <p className="muted">
+                      If this says
+                      "Not processed today" and
+                      ROI Received is 0 after a
+                      completed 24-hour cycle,
+                      processDailyROI has not
+                      credited this package yet.
+                    </p>
+                  </>
+                ) : (
+                  <p className="muted">
+                    Automation status could not
+                    be read from the deployed
+                    contract.
+                  </p>
+                )}
+              </Card>
+            </div>
+          );
+        }
+      )}
+
+      {packages.length === 0 && (
+        <Card title="Staking Info">
+          <p className="muted">
+            No PackageActivated event was found
+            for this wallet.
+          </p>
+        </Card>
+      )}
     </>
   );
 }
