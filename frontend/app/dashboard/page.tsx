@@ -3641,78 +3641,53 @@ function LevelIncome({
       {/* LEVEL STRUCTURE */}
 
       <Card title="Level Structure">
-  <div className="levelTableWrap">
-    <table className="levelTable">
-      <thead>
-        <tr>
-          <th>LEVEL</th>
-          <th>PERCENT</th>
-          <th>STATUS</th>
-        </tr>
-      </thead>
+  <div className="levelTable">
 
-      <tbody>
-        <tr>
-          <td>L1</td>
-          <td>10%</td>
-          <td>Pending</td>
-        </tr>
+    <div className="levelTableHead">
+      <span>LEVEL</span>
+      <span>PERCENT</span>
+      <span>STATUS</span>
+    </div>
 
-        <tr>
-          <td>L2</td>
-          <td>10%</td>
-          <td>Pending</td>
-        </tr>
+    {[
+      { level: 1, percent: "10%" },
+      { level: 2, percent: "10%" },
+      { level: 3, percent: "5%" },
+      { level: 4, percent: "3%" },
+      { level: 5, percent: "2%" },
+      { level: 6, percent: "1%" },
+      { level: 7, percent: "1%" },
+      { level: 8, percent: "1%" },
+      { level: 9, percent: "0.5%" },
+      { level: 10, percent: "0.5%" },
+    ].map((item) => {
+      const isOpen =
+        Number(profile.activeDirectCount || 0) >= item.level;
 
-        <tr>
-          <td>L3</td>
-          <td>5%</td>
-          <td>Pending</td>
-        </tr>
+      return (
+        <div
+          className="levelTableRow"
+          key={item.level}
+        >
+          <span>L{item.level}</span>
 
-        <tr>
-          <td>L4</td>
-          <td>3%</td>
-          <td>Pending</td>
-        </tr>
+          <span>
+            {item.percent}
+          </span>
 
-        <tr className="activeLevel">
-          <td>L5</td>
-          <td>2%</td>
-          <td>Pending</td>
-        </tr>
+          <span
+            className={
+              isOpen
+                ? "levelStatus open"
+                : "levelStatus pending"
+            }
+          >
+            {isOpen ? "OPEN" : "PENDING"}
+          </span>
+        </div>
+      );
+    })}
 
-        <tr>
-          <td>L6</td>
-          <td>1%</td>
-          <td>Pending</td>
-        </tr>
-
-        <tr>
-          <td>L7</td>
-          <td>1%</td>
-          <td>Pending</td>
-        </tr>
-
-        <tr>
-          <td>L8</td>
-          <td>1%</td>
-          <td>Pending</td>
-        </tr>
-
-        <tr>
-          <td>L9</td>
-          <td>0.5%</td>
-          <td>Pending</td>
-        </tr>
-
-        <tr>
-          <td>L10</td>
-          <td>0.5%</td>
-          <td>Pending</td>
-        </tr>
-      </tbody>
-    </table>
   </div>
 </Card>
 
@@ -5267,7 +5242,83 @@ select{
   gap:16px;
   margin-bottom:18px;
 }
+.levelTable{
+  width:100%;
+}
 
+.levelTableHead,
+.levelTableRow{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  align-items:center;
+  column-gap:20px;
+}
+
+.levelTableHead{
+  padding:12px 14px;
+  background:#101b2d;
+  border-radius:10px 10px 0 0;
+  color:#6fa9ff;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:1px;
+  text-transform:uppercase;
+}
+
+.levelTableRow{
+  padding:15px 14px;
+  border-bottom:1px solid #142033;
+  color:#dce5f5;
+  font-size:14px;
+}
+
+.levelTableRow:last-child{
+  border-bottom:0;
+}
+
+.levelTableRow>span:nth-child(2){
+  font-weight:700;
+}
+
+.levelStatus{
+  display:inline-flex;
+  width:max-content;
+  min-width:78px;
+  justify-content:center;
+  padding:6px 11px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.08em;
+}
+
+.levelStatus.open{
+  background:#0b2a20;
+  border:1px solid #174d3a;
+  color:#4ade80;
+}
+
+.levelStatus.pending{
+  background:#251f0d;
+  border:1px solid #4a3b14;
+  color:#f7d879;
+}
+
+@media(max-width:600px){
+
+  .levelTableHead,
+  .levelTableRow{
+    grid-template-columns:1fr .8fr 1.2fr;
+    column-gap:10px;
+  }
+
+  .levelTableHead,
+  .levelTableRow{
+    padding-left:10px;
+    padding-right:10px;
+  }
+
+}
 .rankReward{
   font-size:24px;
   font-weight:800;
