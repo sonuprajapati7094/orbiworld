@@ -3497,6 +3497,10 @@ function Earnings({
    LEVEL INCOME
 ========================================================= */
 
+/* =========================================================
+   LEVEL INCOME
+========================================================= */
+
 function LevelIncome({
   profile,
 }: any) {
@@ -3513,13 +3517,16 @@ function LevelIncome({
           </h2>
 
           <p>
-            Income earned from your
-            qualified network levels.
+            Track your network-based level
+            income and business qualification.
           </p>
         </div>
       </div>
 
+      {/* TOP METRICS */}
+
       <div className="grid four">
+
         <Metric
           title="Total Level Income"
           value={money(
@@ -3537,7 +3544,7 @@ function LevelIncome({
         />
 
         <Metric
-          title="Directs"
+          title="Direct Members"
           value={String(
             profile.directCount
           )}
@@ -3549,12 +3556,17 @@ function LevelIncome({
           value={String(
             profile.activeDirectCount
           )}
-          sub="Active direct members"
+          sub="Currently active"
         />
+
       </div>
 
+      {/* SUMMARY */}
+
       <div className="two">
+
         <Card title="Level Income Summary">
+
           <Row
             label="Lifetime Level Income"
             value={`${money(
@@ -3577,35 +3589,140 @@ function LevelIncome({
           />
 
           <Row
+            label="Monthly Business"
+            value={`${money(
+              profile.monthlyBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Today's Business"
+            value={`${money(
+              profile.todayBusiness
+            )} USDT`}
+          />
+
+        </Card>
+
+
+        <Card title="Network Qualification">
+
+          <Row
+            label="Direct Members"
+            value={String(
+              profile.directCount
+            )}
+          />
+
+          <Row
             label="Active Directs"
             value={String(
               profile.activeDirectCount
             )}
           />
+
+          <Row
+            label="Level Income Status"
+            value="Active"
+          />
+
+          <Row
+            label="Network Business"
+            value={`${money(
+              profile.lifetimeBusiness
+            )} USDT`}
+          />
+
         </Card>
 
-        <Card title="Level Structure">
-          <Row
-            label="Level 1"
-            value="Contract data"
-          />
-
-          <Row
-            label="Level 2"
-            value="Contract data"
-          />
-
-          <Row
-            label="Level 3"
-            value="Contract data"
-          />
-
-          <Row
-            label="Level 4+"
-            value="Contract data"
-          />
-        </Card>
       </div>
+
+
+      {/* LEVEL STRUCTURE */}
+
+      <Card title="Level Structure">
+
+        <div className="levelInfo">
+
+          <div className="levelInfoRow">
+            <div>
+              <strong>
+                Level Income
+              </strong>
+
+              <small>
+                Network-based income
+              </small>
+            </div>
+
+            <span className="statusBadge">
+              ENABLED
+            </span>
+          </div>
+
+
+          <div className="levelInfoRow">
+            <div>
+              <strong>
+                Qualified Network
+              </strong>
+
+              <small>
+                {profile.activeDirectCount} active
+                direct member
+                {profile.activeDirectCount === 1
+                  ? ""
+                  : "s"}
+              </small>
+            </div>
+
+            <span>
+              {profile.activeDirectCount}
+            </span>
+          </div>
+
+
+          <div className="levelInfoRow">
+            <div>
+              <strong>
+                Lifetime Business
+              </strong>
+
+              <small>
+                Total network business
+              </small>
+            </div>
+
+            <span>
+              {money(
+                profile.lifetimeBusiness
+              )} USDT
+            </span>
+          </div>
+
+
+          <div className="levelInfoRow">
+            <div>
+              <strong>
+                Total Earned
+              </strong>
+
+              <small>
+                Cumulative level income
+              </small>
+            </div>
+
+            <span>
+              {money(
+                profile.totalLevelIncome
+              )} USDT
+            </span>
+          </div>
+
+        </div>
+
+      </Card>
+
     </>
   );
 }
@@ -5444,6 +5561,97 @@ code{
   .rankGrid{
     grid-template-columns:1fr;
   }
+    /* =========================================================
+   LEVEL INCOME
+========================================================= */
+
+.levelInfo{
+
+  display:flex;
+
+  flex-direction:column;
+
+}
+
+.levelInfoRow{
+
+  display:flex;
+
+  justify-content:space-between;
+
+  align-items:center;
+
+  gap:20px;
+
+  padding:18px 0;
+
+  border-bottom:1px solid #142033;
+
+}
+
+.levelInfoRow:last-child{
+
+  border-bottom:0;
+
+}
+
+.levelInfoRow > div{
+
+  display:flex;
+
+  flex-direction:column;
+
+  gap:5px;
+
+}
+
+.levelInfoRow strong{
+
+  color:#e7edf7;
+
+  font-size:15px;
+
+}
+
+.levelInfoRow small{
+
+  color:#71809a;
+
+  font-size:12px;
+
+}
+
+.levelInfoRow > span{
+
+  color:#e7edf7;
+
+  font-weight:700;
+
+  text-align:right;
+
+}
+
+.statusBadge{
+
+  display:inline-flex;
+
+  align-items:center;
+
+  padding:6px 10px;
+
+  border-radius:999px;
+
+  background:#0b2a20;
+
+  border:1px solid #174d3a;
+
+  color:#4ade80 !important;
+
+  font-size:11px;
+
+  letter-spacing:.08em;
+
+}
 
   .welcome{
     display:block;
