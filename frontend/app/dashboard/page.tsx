@@ -2680,6 +2680,13 @@ function DashboardContent(
         />
       );
 
+      case "level-income":
+  return (
+    <LevelIncome
+      profile={profile}
+    />
+  );
+
     case "business":
       return (
         <Business
@@ -3482,6 +3489,123 @@ function Earnings({
           )} USDT`}
         />
       </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   LEVEL INCOME
+========================================================= */
+
+function LevelIncome({
+  profile,
+}: any) {
+  return (
+    <>
+      <div className="sectionHead">
+        <div>
+          <span className="eyebrow">
+            ORBIWORLD
+          </span>
+
+          <h2>
+            Level Income
+          </h2>
+
+          <p>
+            Income earned from your
+            qualified network levels.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid four">
+        <Metric
+          title="Total Level Income"
+          value={money(
+            profile.totalLevelIncome
+          )}
+          sub="Lifetime cumulative"
+        />
+
+        <Metric
+          title="Earning Wallet"
+          value={money(
+            profile.earningWallet
+          )}
+          sub="ROI + Level"
+        />
+
+        <Metric
+          title="Directs"
+          value={String(
+            profile.directCount
+          )}
+          sub="Total direct members"
+        />
+
+        <Metric
+          title="Active Directs"
+          value={String(
+            profile.activeDirectCount
+          )}
+          sub="Active direct members"
+        />
+      </div>
+
+      <div className="two">
+        <Card title="Level Income Summary">
+          <Row
+            label="Lifetime Level Income"
+            value={`${money(
+              profile.totalLevelIncome
+            )} USDT`}
+          />
+
+          <Row
+            label="Current Earning Wallet"
+            value={`${money(
+              profile.earningWallet
+            )} USDT`}
+          />
+
+          <Row
+            label="Lifetime Business"
+            value={`${money(
+              profile.lifetimeBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Active Directs"
+            value={String(
+              profile.activeDirectCount
+            )}
+          />
+        </Card>
+
+        <Card title="Level Structure">
+          <Row
+            label="Level 1"
+            value="Contract data"
+          />
+
+          <Row
+            label="Level 2"
+            value="Contract data"
+          />
+
+          <Row
+            label="Level 3"
+            value="Contract data"
+          />
+
+          <Row
+            label="Level 4+"
+            value="Contract data"
+          />
+        </Card>
+      </div>
     </>
   );
 }
