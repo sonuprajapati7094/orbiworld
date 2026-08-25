@@ -3641,87 +3641,80 @@ function LevelIncome({
       {/* LEVEL STRUCTURE */}
 
       <Card title="Level Structure">
+  <div className="levelTableWrap">
+    <table className="levelTable">
+      <thead>
+        <tr>
+          <th>LEVEL</th>
+          <th>PERCENT</th>
+          <th>STATUS</th>
+        </tr>
+      </thead>
 
-        <div className="levelInfo">
+      <tbody>
+        <tr>
+          <td>L1</td>
+          <td>10%</td>
+          <td>Pending</td>
+        </tr>
 
-          <div className="levelInfoRow">
-            <div>
-              <strong>
-                Level Income
-              </strong>
+        <tr>
+          <td>L2</td>
+          <td>10%</td>
+          <td>Pending</td>
+        </tr>
 
-              <small>
-                Network-based income
-              </small>
-            </div>
+        <tr>
+          <td>L3</td>
+          <td>5%</td>
+          <td>Pending</td>
+        </tr>
 
-            <span className="statusBadge">
-              ENABLED
-            </span>
-          </div>
+        <tr>
+          <td>L4</td>
+          <td>3%</td>
+          <td>Pending</td>
+        </tr>
 
+        <tr className="activeLevel">
+          <td>L5</td>
+          <td>2%</td>
+          <td>Pending</td>
+        </tr>
 
-          <div className="levelInfoRow">
-            <div>
-              <strong>
-                Qualified Network
-              </strong>
+        <tr>
+          <td>L6</td>
+          <td>1%</td>
+          <td>Pending</td>
+        </tr>
 
-              <small>
-                {profile.activeDirectCount} active
-                direct member
-                {profile.activeDirectCount === 1
-                  ? ""
-                  : "s"}
-              </small>
-            </div>
+        <tr>
+          <td>L7</td>
+          <td>1%</td>
+          <td>Pending</td>
+        </tr>
 
-            <span>
-              {profile.activeDirectCount}
-            </span>
-          </div>
+        <tr>
+          <td>L8</td>
+          <td>1%</td>
+          <td>Pending</td>
+        </tr>
 
+        <tr>
+          <td>L9</td>
+          <td>0.5%</td>
+          <td>Pending</td>
+        </tr>
 
-          <div className="levelInfoRow">
-            <div>
-              <strong>
-                Lifetime Business
-              </strong>
-
-              <small>
-                Total network business
-              </small>
-            </div>
-
-            <span>
-              {money(
-                profile.lifetimeBusiness
-              )} USDT
-            </span>
-          </div>
-
-
-          <div className="levelInfoRow">
-            <div>
-              <strong>
-                Total Earned
-              </strong>
-
-              <small>
-                Cumulative level income
-              </small>
-            </div>
-
-            <span>
-              {money(
-                profile.totalLevelIncome
-              )} USDT
-            </span>
-          </div>
-
-        </div>
-
-      </Card>
+        <tr>
+          <td>L10</td>
+          <td>0.5%</td>
+          <td>Pending</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</Card>
 
     </>
   );
