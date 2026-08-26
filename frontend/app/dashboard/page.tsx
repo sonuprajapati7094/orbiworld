@@ -817,115 +817,41 @@ export default function DashboardPage() {
          * Query logs in small chunks. This is the important fix for
          * packages disappearing when a single large query is rejected.
          */
-                const historyRpcUrls = [
-          "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
-          "https://data-seed-prebsc-2-s1.bnbchain.org:8545",
-          "https://data-seed-prebsc-1-s2.bnbchain.org:8545",
-          "https://data-seed-prebsc-2-s2.bnbchain.org:8545",
-          "https://data-seed-prebsc-1-s3.bnbchain.org:8545",
-          "https://data-seed-prebsc-2-s3.bnbchain.org:8545",
-        ];
-
-        const historyProviders =
-          historyRpcUrls.map(
-            (url) =>
-              new ethers.providers.JsonRpcProvider(
-                url,
-                {
-                  name: "bsc-testnet",
-                  chainId: 97,
-                }
-              )
-          );
-
         const safeQuery = async (
           filter: any,
           startBlock = historyFromBlock
         ) => {
+          const results: any[] = [];
           const chunkSize = 2000;
 
           for (
-            let providerIndex = 0;
-            providerIndex <
-            historyProviders.length;
-            providerIndex++
+            let from = startBlock;
+            from <= latest;
+            from += chunkSize
           ) {
-            const historyProvider =
-              historyProviders[
-                providerIndex
-              ];
+            const to = Math.min(
+              from + chunkSize - 1,
+              latest
+            );
 
             try {
-              const rpcLatest =
-                await historyProvider.getBlockNumber();
-
-              const queryTo = Math.min(
-                latest,
-                rpcLatest
-              );
-
-              const results: any[] = [];
-
-              for (
-                let from = startBlock;
-                from <= queryTo;
-                from += chunkSize
-              ) {
-                const to = Math.min(
-                  from + chunkSize - 1,
-                  queryTo
+              const chunk =
+                await c.queryFilter(
+                  filter,
+                  from,
+                  to
                 );
 
-                try {
-                  const readOnlyContract =
-                    c.connect(
-                      historyProvider
-                    );
-
-                  const chunk =
-                    await readOnlyContract.queryFilter(
-                      filter,
-                      from,
-                      to
-                    );
-
-                  results.push(
-                    ...chunk
-                  );
-                } catch (
-                  chunkError
-                ) {
-                  console.warn(
-                    `History chunk failed on RPC ${providerIndex + 1} for ${from}-${to}`,
-                    chunkError
-                  );
-                }
-              }
-
-              /*
-               * Important:
-               * Return only after this RPC has successfully
-               * completed the complete historical window.
-               *
-               * If it returned zero events, that is a valid
-               * result — do not silently switch RPCs.
-               */
-              return results;
-            } catch (
-              providerError
-            ) {
+              results.push(...chunk);
+            } catch (queryError) {
               console.warn(
-                `History RPC ${providerIndex + 1} failed. Trying next RPC...`,
-                providerError
+                `History query failed for blocks ${from}-${to}:`,
+                queryError
               );
             }
           }
 
-          console.error(
-            "All BSC Testnet history RPCs failed."
-          );
-
-          return [];
+          return results;
         };
 
         /*
