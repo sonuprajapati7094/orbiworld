@@ -1016,195 +1016,118 @@ export default function DashboardPage() {
           ),
         ]);
 
-        /* =================================================
-           PACKAGES
-        ================================================= */
-        const packageMap =
-          new Map<
-            string,
-            PackageRow
-          >();
+       /* =================================================
+   PACKAGES — DIRECT ON-CHAIN READ
+   Source of truth:
+   getUserPackages(userId)
+   getActiveUserPackages(userId)
+   getPackage(packageId)
 
-        for (
-          const event of activated as any[]
-        ) {
-          const args =
-            event.args;
+   No PackageActivated / PackageTopup event scanning.
+================================================= */
 
-          const id =
-            bn(
-              args.packageId ??
-                args[0]
-            ).toString();
+const packageIdsRaw =
+  await c.getUserPackages(p.id);
 
-          const amount =
-            bn(
-              args.amount ??
-                args[2]
-            );
+const activePackageIdsRaw =
+  await c.getActiveUserPackages(p.id);
 
-          packageMap.set(id, {
-            packageId: id,
-            amount,
-            block:
-              event.blockNumber,
-            tx:
-              event.transactionHash,
-            startTime: 0,
-            roiPaid: ZERO,
-            closed: false,
-          });
-        }
+const packageIds = (packageIdsRaw as any[]).map(
+  (id) => bn(id).toString()
+);
 
-        /*
-         * PackageTopup is also a package event. For historical top-ups,
-         * the event itself has packageId + amount, while the transaction
-         * sender identifies the user. Add the event as its own package
-         * row. If a packageId is already present, add the top-up amount to
-         * that package instead of creating a duplicate row.
-         */
-        for (
-          const event of topups as any[]
-        ) {
-          const args =
-            event.args;
+const activePackageIds = new Set(
+  (activePackageIdsRaw as any[]).map(
+    (id) => bn(id).toString()
+  )
+);
 
-          const id =
-            bn(
-              args.packageId ??
-                args[0]
-            ).toString();
+const packageRows: PackageRow[] =
+  await Promise.all(
+    packageIds.map(
+      async (packageId) => {
+        const pkg =
+          await c.getPackage(packageId);
 
-          const amount =
-            bn(
-              args.amount ??
-                args[1]
-            );
+        const id =
+          bn(
+            pkg.id ??
+              pkg[0]
+          ).toString();
 
-          const existing =
-            packageMap.get(id);
-
-          if (existing) {
-            existing.amount =
-              existing.amount.add(
-                amount
-              );
-
-            /* Keep the latest top-up transaction as the package activity tx. */
-            if (
-              event.blockNumber >=
-              existing.block
-            ) {
-              existing.block =
-                event.blockNumber;
-              existing.tx =
-                event.transactionHash;
-            }
-          } else {
-            packageMap.set(id, {
-              packageId: id,
-              amount,
-              block:
-                event.blockNumber,
-              tx:
-                event.transactionHash,
-              startTime: 0,
-              roiPaid: ZERO,
-              closed: false,
-            });
-          }
-        }
-
-        for (
-          const event of closed as any[]
-        ) {
-          const args =
-            event.args;
-
-          const id =
-            bn(
-              args.packageId ??
-                args[0]
-            ).toString();
-
-          const row =
-            packageMap.get(id);
-
-          if (row) {
-            row.closed = true;
-
-            row.closeStatus =
-              Number(
-                args.closeStatus ??
-                  args[2] ??
-                  0
-              );
-          }
-        }
-
-        /* =================================================
-           DAILY ROI EVENTS
-
-           DailyROIProcessed is indexed by packageId, so after we know
-           this user's package IDs we query only those packages.
-        ================================================= */
-        const packageRows =
-          Array.from(
-            packageMap.values()
+        const amount =
+          bn(
+            pkg.amount ??
+              pkg[2]
           );
 
-        await Promise.all(
-          packageRows.map(
-            async (row) => {
-              const [
-                roiLogs,
-                blockData,
-              ] = await Promise.all([
-                safeQuery(
-                  c.filters.DailyROIProcessed(
-                    row.packageId
-                  ),
-                  packageFromBlock
-                ),
-                c.provider.getBlock(
-                  row.block
-                ),
-              ]);
+        const roiPaid =
+          bn(
+            pkg.roiPaid ??
+              pkg[4]
+          );
 
-              row.roiPaid =
-                (roiLogs as any[]).reduce(
-                  (
-                    total,
-                    event
-                  ) =>
-                    total.add(
-                      bn(
-                        event.args
-                          ?.roiAmount ??
-                          event.args?.[1] ??
-                          0
-                      )
-                    ),
-                  ZERO
-                );
+        const startTime =
+          Number(
+            pkg.startTime ??
+              pkg[7] ??
+              0
+          );
 
-              row.startTime =
-                Number(
-                  blockData?.timestamp ??
-                    0
-                );
-            }
-          )
-        );
+        const status =
+          Number(
+            pkg.status ??
+              pkg[11] ??
+              0
+          );
 
-        setPackages(
-          packageRows.sort(
-            (a, b) =>
-              Number(b.packageId) -
-              Number(a.packageId)
-          )
-        );
+        const exists =
+          Boolean(
+            pkg.exists ??
+              pkg[14]
+          );
 
+        /*
+         * Contract PackageStatus:
+         * 0 = NONE
+         * 1 = ACTIVE
+         * 2 = CLOSED
+         */
+        const isActive =
+          activePackageIds.has(id);
+
+        /*
+         * Package helper does not contain
+         * transactionHash/blockNumber.
+         * Therefore package data itself is
+         * read entirely from contract storage.
+         */
+        return {
+          packageId: id,
+          amount,
+          block: 0,
+          tx: "",
+          startTime,
+          roiPaid,
+          closed:
+            !isActive ||
+            status !== 1 ||
+            !exists,
+        };
+      }
+    )
+  );
+
+/*
+ * Newest package first.
+ */
+packageRows.sort(
+  (a, b) =>
+    Number(b.packageId) -
+    Number(a.packageId)
+);
+
+setPackages(packageRows);
         /*
          * Everything below this point is unchanged: automation,
          * withdrawals, rank, royalty and team history.
