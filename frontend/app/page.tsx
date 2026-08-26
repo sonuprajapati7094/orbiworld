@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 
 /**
  * ORBIWORLD — BSC TESTNET
- * Contract: 0x85DBcA033F79018602f752Cf36a9b3683657f631
+ * Contract: 0x66Aad6c966C4A4E6B90E72388248A6d21c7944a6
  * USDT:     0x855c91cF87745e01e370B671f0Da25dcC7685394
  *
  * IMPORTANT:
@@ -22,7 +22,7 @@ import { ethers } from "ethers";
  * "Earning Wallet (ROI + Level)" rather than inventing separate balances.
  */
 
-const CONTRACT_ADDRESS = "0x85DBcA033F79018602f752Cf36a9b3683657f631";
+const CONTRACT_ADDRESS = "0x66Aad6c966C4A4E6B90E72388248A6d21c7944a6";
 const USDT_ADDRESS = "0x855c91cF87745e01e370B671f0Da25dcC7685394";
 
 const BSC_TESTNET = {
