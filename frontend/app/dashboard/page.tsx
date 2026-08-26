@@ -804,48 +804,60 @@ export default function DashboardPage() {
           await c.provider.getBlockNumber();
 
         /*
-         * Bounded range to avoid huge RPC requests.
+         * Keep the historical window bounded, but never send the
+         * whole window as one eth_getLogs request. Public BSC RPC
+         * endpoints can reject large log ranges.
          */
         const historyFromBlock =
           Math.max(0, latest - 50000);
 
-        /*
-         * PackageActivated has indexed userId, so we can safely
-         * scan from deployment history for this user's packages.
-         * This fixes older packages disappearing from the UI.
-         */
         const packageFromBlock = historyFromBlock;
 
         /*
-         * IMPORTANT: never let one optional history query prevent
-         * package loading. Some public BSC RPC endpoints reject large
-         * eth_getLogs requests or specific indexed-topic combinations.
-         * Every query therefore fails independently and returns [].
+         * Query logs in small chunks. This is the important fix for
+         * packages disappearing when a single large query is rejected.
          */
         const safeQuery = async (
           filter: any,
           startBlock = historyFromBlock
         ) => {
-          try {
-            return await c.queryFilter(
-              filter,
-              startBlock,
+          const results: any[] = [];
+          const chunkSize = 2000;
+
+          for (
+            let from = startBlock;
+            from <= latest;
+            from += chunkSize
+          ) {
+            const to = Math.min(
+              from + chunkSize - 1,
               latest
             );
-          } catch (queryError) {
-            console.warn(
-              "History query failed:",
-              queryError
-            );
-            return [];
+
+            try {
+              const chunk =
+                await c.queryFilter(
+                  filter,
+                  from,
+                  to
+                );
+
+              results.push(...chunk);
+            } catch (queryError) {
+              console.warn(
+                `History query failed for blocks ${from}-${to}:`,
+                queryError
+              );
+            }
           }
+
+          return results;
         };
 
         /*
-         * PackageActivated is the source of truth for the first stake.
-         * Query the event without the userId topic and filter locally.
-         * This is more reliable across BSC RPC implementations than
-         * passing a BigNumber/string into an indexed topic filter.
+         * PackageActivated is the source of truth for packages created
+         * by activateAccount(). It contains indexed userId, so filter
+         * the returned events to this profile.
          */
         const activatedAll = await safeQuery(
           c.filters.PackageActivated(),
@@ -875,6 +887,74 @@ export default function DashboardPage() {
                 ""
             ).toLowerCase() ===
             p.id.toString().toLowerCase()
+        );
+
+        /*
+         * PackageTopup has no userId in the event. We therefore identify
+         * the owner from the transaction sender. A topUp transaction is
+         * sent by the wallet that owns the package.
+         */
+        const topupAll = await safeQuery(
+          c.filters.PackageTopup(),
+          packageFromBlock
+        );
+
+        const topupTransactions = new Map<
+          string,
+          string | null
+        >();
+
+        await Promise.all(
+          (topupAll as any[]).map(
+            async (event) => {
+              const hash =
+                event.transactionHash;
+
+              if (
+                !hash ||
+                topupTransactions.has(hash)
+              ) {
+                return;
+              }
+
+              try {
+                const tx =
+                  await c.provider.getTransaction(
+                    hash
+                  );
+
+                topupTransactions.set(
+                  hash,
+                  tx?.from ?? null
+                );
+              } catch (txError) {
+                console.warn(
+                  "Top-up transaction sender read failed:",
+                  txError
+                );
+
+                topupTransactions.set(
+                  hash,
+                  null
+                );
+              }
+            }
+          )
+        );
+
+        const topups = (topupAll as any[]).filter(
+          (event) => {
+            const sender =
+              topupTransactions.get(
+                event.transactionHash
+              );
+
+            return Boolean(
+              sender &&
+              sender.toLowerCase() ===
+                p.wallet.toLowerCase()
+            );
+          }
         );
 
         const [
@@ -939,7 +1019,6 @@ export default function DashboardPage() {
         /* =================================================
            PACKAGES
         ================================================= */
-
         const packageMap =
           new Map<
             string,
@@ -978,11 +1057,63 @@ export default function DashboardPage() {
         }
 
         /*
-         * The deployed contract's PackageTopup event does not include
-         * userId, and topUp creates a NEW package. We therefore do not
-         * merge those events into an existing package row here.
-         * The first/active package is reconstructed from PackageActivated.
+         * PackageTopup is also a package event. For historical top-ups,
+         * the event itself has packageId + amount, while the transaction
+         * sender identifies the user. Add the event as its own package
+         * row. If a packageId is already present, add the top-up amount to
+         * that package instead of creating a duplicate row.
          */
+        for (
+          const event of topups as any[]
+        ) {
+          const args =
+            event.args;
+
+          const id =
+            bn(
+              args.packageId ??
+                args[0]
+            ).toString();
+
+          const amount =
+            bn(
+              args.amount ??
+                args[1]
+            );
+
+          const existing =
+            packageMap.get(id);
+
+          if (existing) {
+            existing.amount =
+              existing.amount.add(
+                amount
+              );
+
+            /* Keep the latest top-up transaction as the package activity tx. */
+            if (
+              event.blockNumber >=
+              existing.block
+            ) {
+              existing.block =
+                event.blockNumber;
+              existing.tx =
+                event.transactionHash;
+            }
+          } else {
+            packageMap.set(id, {
+              packageId: id,
+              amount,
+              block:
+                event.blockNumber,
+              tx:
+                event.transactionHash,
+              startTime: 0,
+              roiPaid: ZERO,
+              closed: false,
+            });
+          }
+        }
 
         for (
           const event of closed as any[]
@@ -1011,14 +1142,16 @@ export default function DashboardPage() {
           }
         }
 
-        /*
-         * DAILY ROI EVENTS
-         *
-         * DailyROIProcessed is indexed by packageId, so after we know
-         * this user's package IDs we query only those packages.
-         */
+        /* =================================================
+           DAILY ROI EVENTS
+
+           DailyROIProcessed is indexed by packageId, so after we know
+           this user's package IDs we query only those packages.
+        ================================================= */
         const packageRows =
-          Array.from(packageMap.values());
+          Array.from(
+            packageMap.values()
+          );
 
         await Promise.all(
           packageRows.map(
@@ -1073,8 +1206,10 @@ export default function DashboardPage() {
         );
 
         /*
-         * Automation diagnostics.
+         * Everything below this point is unchanged: automation,
+         * withdrawals, rank, royalty and team history.
          */
+
         try {
           const automation =
             new ethers.Contract(
@@ -1139,7 +1274,6 @@ export default function DashboardPage() {
         /* =================================================
            WITHDRAWALS
         ================================================= */
-
         const withdrawalMap =
           new Map<
             string,
@@ -1160,37 +1294,30 @@ export default function DashboardPage() {
 
           withdrawalMap.set(id, {
             requestId: id,
-
             walletType:
               Number(
                 args.walletType ??
                   args[2]
               ),
-
             amount:
               bn(
                 args.amount ??
                   args[3]
               ),
-
             fee:
               bn(
                 args.fee ??
                   args[4]
               ),
-
             netAmount:
               bn(
                 args.netAmount ??
                   args[5]
               ),
-
             block:
               event.blockNumber,
-
             tx:
               event.transactionHash,
-
             status:
               "PENDING",
           });
@@ -1244,7 +1371,6 @@ export default function DashboardPage() {
         /* =================================================
            RANK HISTORY
         ================================================= */
-
         setRankHistory(
           (rankEvents as any[])
             .map((event) => ({
@@ -1252,16 +1378,13 @@ export default function DashboardPage() {
                 event.args.rank ??
                   event.args[1]
               ),
-
               reward:
                 bn(
                   event.args.reward ??
                     event.args[2]
                 ),
-
               block:
                 event.blockNumber,
-
               tx:
                 event.transactionHash,
             }))
@@ -1271,7 +1394,6 @@ export default function DashboardPage() {
         /* =================================================
            ROYALTY HISTORY
         ================================================= */
-
         setRoyaltyHistory(
           (royaltyEvents as any[])
             .map((event) => ({
@@ -1281,16 +1403,13 @@ export default function DashboardPage() {
                     .royaltyLevel ??
                     event.args[1]
                 ),
-
               amount:
                 bn(
                   event.args.amount ??
                     event.args[2]
                 ),
-
               block:
                 event.blockNumber,
-
               tx:
                 event.transactionHash,
             }))
@@ -1300,7 +1419,6 @@ export default function DashboardPage() {
         /* =================================================
            DIRECT TEAM
         ================================================= */
-
         const teamRows: TeamRow[] =
           [];
 
@@ -1329,29 +1447,24 @@ export default function DashboardPage() {
             teamRows.push({
               id:
                 id.toString(),
-
               wallet,
-
               sponsorId:
                 bn(
                   rawUser.sponsorId ??
                     rawUser[2]
                 ).toString(),
-
               status:
                 Number(
                   rawUser.status ??
                     rawUser[3] ??
                     0
                 ),
-
               directCount:
                 Number(
                   rawUser.directCount ??
                     rawUser[4] ??
                     0
                 ),
-
               activeDirectCount:
                 Number(
                   rawUser.activeDirectCount ??
@@ -1360,11 +1473,7 @@ export default function DashboardPage() {
                 ),
             });
           } catch {
-            /*
-             * Ignore an individual broken
-             * team read instead of failing
-             * the entire dashboard.
-             */
+            /* Ignore an individual broken team read. */
           }
         }
 
@@ -2037,12 +2146,124 @@ export default function DashboardPage() {
         "Top-up submitted..."
       );
 
-      await tx.wait();
+      const receipt =
+        await tx.wait();
 
-      setStakeAmount("");
+      /*
+       * Read the exact PackageTopup event from this confirmed receipt.
+       * This gives the UI the package immediately instead of waiting for
+       * a historical log scan. The same package is reconciled again by
+       * refresh() below.
+       */
+      try {
+        let topupPackage: PackageRow | null = null;
+
+        for (
+          const log of receipt.logs || []
+        ) {
+          try {
+            const parsed =
+              contract.interface.parseLog(
+                log
+              );
+
+            if (
+              parsed.name !==
+              "PackageTopup"
+            ) {
+              continue;
+            }
+
+            const packageId =
+              bn(
+                parsed.args.packageId ??
+                  parsed.args[0]
+              ).toString();
+
+            const topupAmount =
+              bn(
+                parsed.args.amount ??
+                  parsed.args[1]
+              );
+
+            const blockData =
+              await contract.provider.getBlock(
+                receipt.blockNumber
+              );
+
+            topupPackage = {
+              packageId,
+              amount: topupAmount,
+              block:
+                receipt.blockNumber,
+              tx:
+                receipt.transactionHash,
+              startTime: Number(
+                blockData?.timestamp ??
+                  0
+              ),
+              roiPaid: ZERO,
+              closed: false,
+            };
+
+            break;
+          } catch {
+            /* Ignore logs that are not ORBI events. */
+          }
+        }
+
+        if (topupPackage) {
+          setPackages(
+            (current) => {
+              const existing =
+                current.find(
+                  (item) =>
+                    item.packageId ===
+                    topupPackage!.packageId
+                );
+
+              if (existing) {
+                return current.map(
+                  (item) =>
+                    item.packageId ===
+                    topupPackage!.packageId
+                      ? {
+                          ...item,
+                          amount: item.amount.add(
+                            topupPackage!.amount
+                          ),
+                          block: topupPackage!.block,
+                          tx: topupPackage!.tx,
+                          startTime: topupPackage!.startTime,
+                        }
+                      : item
+                );
+              }
+
+              return [
+                topupPackage!,
+                ...current,
+              ].sort(
+                (a, b) =>
+                  Number(b.packageId) -
+                  Number(a.packageId)
+              );
+            }
+          );
+        }
+      } catch (receiptError) {
+        console.warn(
+          "Top-up receipt package parsing failed:",
+          receiptError
+        );
+      }
+
+      setStakeAmount(
+        ""
+      );
 
       notify(
-        "Top-up successful."
+        "Top-up successful. Package updated."
       );
 
       await refresh();
