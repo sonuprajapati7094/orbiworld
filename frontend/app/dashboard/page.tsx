@@ -814,7 +814,7 @@ export default function DashboardPage() {
          * scan from deployment history for this user's packages.
          * This fixes older packages disappearing from the UI.
          */
-        const packageFromBlock = 0;
+        const packageFromBlock = historyFromBlock;
 
         const query = async (
           filter: any,
@@ -2559,8 +2559,8 @@ function titleFor(
     referral:
       "Referral Center",
 
-      "level-income":
-  "Level Income",
+    "level-income":
+      "Level Income",
 
     rank:
       "Rank Center",
@@ -2771,6 +2771,8 @@ function DashboardContent(
             usdtBalance
           }
           total={total}
+          packages={packages}
+          config={config}
           setSection={
             setSection
           }
@@ -3174,8 +3176,68 @@ function Overview({
   profile,
   usdtBalance,
   total,
+  packages,
+  config,
   setSection,
 }: any) {
+  const activePackage =
+    (packages as PackageRow[]).find(
+      (item) => !item.closed
+    ) || packages?.[0];
+
+  const packageInfo = activePackage
+    ? (() => {
+        const target = activePackage.amount.mul(
+          MAX_MULTIPLIER
+        );
+
+        // The 2x target includes the original capital.
+        // ROI required to reach 2x = package amount.
+        const roiTarget = activePackage.amount;
+        const roiPaid = activePackage.roiPaid.gt(
+          roiTarget
+        )
+          ? roiTarget
+          : activePackage.roiPaid;
+
+        const remaining = roiTarget.gt(roiPaid)
+          ? roiTarget.sub(roiPaid)
+          : ZERO;
+
+        const dailyROI = activePackage.amount
+          .mul(config.roiBps)
+          .div(10000);
+
+        const daysRemaining = dailyROI.gt(0)
+          ? remaining
+              .add(dailyROI)
+              .sub(1)
+              .div(dailyROI)
+              .toNumber()
+          : 0;
+
+        const progress = roiTarget.gt(0)
+          ? Math.min(
+              100,
+              Number(
+                roiPaid
+                  .mul(100)
+                  .div(roiTarget)
+              )
+            )
+          : 0;
+
+        return {
+          target,
+          roiPaid,
+          remaining,
+          dailyROI,
+          daysRemaining,
+          progress,
+        };
+      })()
+    : null;
+
   return (
     <>
       <div className="welcome">
@@ -3185,58 +3247,36 @@ function Overview({
           </span>
 
           <h2>
-            Build your
-            network. Grow
-            your business.
+            Build your network. Grow your business.
           </h2>
 
           <p>
-            {statusLabel(
-              profile.status
-            )}{" "}
-            • User #
-            {profile.id.toString()}
+            {statusLabel(profile.status)} • User #{profile.id.toString()}
           </p>
         </div>
 
         <div className="walletBalance">
-          <small>
-            USDT Wallet
-          </small>
-
-          <b>
-            {money(
-              usdtBalance
-            )}
-          </b>
+          <small>USDT Wallet</small>
+          <b>{money(usdtBalance)}</b>
         </div>
       </div>
 
       <div className="grid four">
         <Metric
           title="Earning Wallet"
-          value={money(
-            profile.earningWallet
-          )}
+          value={money(profile.earningWallet)}
           sub="ROI + Level"
         />
-
         <Metric
           title="Rank Wallet"
-          value={money(
-            profile.rankWallet
-          )}
+          value={money(profile.rankWallet)}
           sub="Rank rewards"
         />
-
         <Metric
           title="Royalty Wallet"
-          value={money(
-            profile.royaltyWallet
-          )}
+          value={money(profile.royaltyWallet)}
           sub="Royalty income"
         />
-
         <Metric
           title="Total Available"
           value={money(total)}
@@ -3247,111 +3287,107 @@ function Overview({
       <div className="grid four">
         <Metric
           title="Lifetime ROI"
-          value={money(
-            profile.totalROIIncome
-          )}
+          value={money(profile.totalROIIncome)}
           sub="Cumulative"
         />
-
         <Metric
           title="Lifetime Level"
-          value={money(
-            profile.totalLevelIncome
-          )}
+          value={money(profile.totalLevelIncome)}
           sub="Cumulative"
         />
-
         <Metric
           title="Rank Rewards"
-          value={money(
-            profile.totalRankIncome
-          )}
+          value={money(profile.totalRankIncome)}
           sub="Cumulative"
         />
-
         <Metric
           title="Royalty Income"
-          value={money(
-            profile.totalRoyaltyIncome
-          )}
+          value={money(profile.totalRoyaltyIncome)}
           sub="Cumulative"
         />
       </div>
 
+      {packageInfo && activePackage && (
+        <Card title={`Active Package • #${activePackage.packageId}`}>
+          <div className="packageHero">
+            <div>
+              <span className="eyebrow">ACTIVE STAKING</span>
+              <strong>${money(activePackage.amount)} USDT</strong>
+              <small>Started from the confirmed on-chain activation transaction.</small>
+            </div>
+            <Pill value={activePackage.closed ? "CLOSED" : "ACTIVE"} />
+          </div>
+
+          <div className="grid four packageMetrics">
+            <Metric
+              title="Target (2×)"
+              value={`${money(packageInfo.target)} USDT`}
+              sub="Maximum package payout"
+            />
+            <Metric
+              title="ROI Received"
+              value={`${money(packageInfo.roiPaid)} USDT`}
+              sub="Actual ROI processed"
+            />
+            <Metric
+              title="Remaining ROI"
+              value={`${money(packageInfo.remaining)} USDT`}
+              sub="Until 2×"
+            />
+            <Metric
+              title="Days Remaining"
+              value={activePackage.closed ? "0" : String(packageInfo.daysRemaining)}
+              sub={activePackage.closed ? "Completed" : "Based on actual ROI"}
+            />
+          </div>
+
+          <Progress
+            label="Progress to 2×"
+            value={packageInfo.progress}
+          />
+
+          <div className="packageActions">
+            <button
+              className="secondary"
+              onClick={() => setSection("packages")}
+            >
+              Open My Packages
+            </button>
+            <button
+              className="secondary"
+              onClick={() => setSection("history-staking")}
+            >
+              Staking History
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {!activePackage && (
+        <Card title="Active Package">
+          <p className="muted">
+            No active package detected yet. After a confirmed staking transaction, this card will update automatically.
+          </p>
+        </Card>
+      )}
+
       <div className="two">
         <Card title="Business Snapshot">
-          <Row
-            label="Today Business"
-            value={`${money(
-              profile.todayBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="30-Day Business"
-            value={`${money(
-              profile.monthlyBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Lifetime Business"
-            value={`${money(
-              profile.lifetimeBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Power Leg"
-            value={`${money(
-              profile.powerLegBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Other Leg"
-            value={`${money(
-              profile.otherLegBusiness
-            )} USDT`}
-          />
+          <Row label="Today Business" value={`${money(profile.todayBusiness)} USDT`} />
+          <Row label="30-Day Business" value={`${money(profile.monthlyBusiness)} USDT`} />
+          <Row label="Lifetime Business" value={`${money(profile.lifetimeBusiness)} USDT`} />
+          <Row label="Power Leg" value={`${money(profile.powerLegBusiness)} USDT`} />
+          <Row label="Other Leg" value={`${money(profile.otherLegBusiness)} USDT`} />
         </Card>
 
         <Card title="Current Qualification">
-          <Row
-            label="Rank"
-            value={rankLabel(
-              profile.rank
-            )}
-          />
-
-          <Row
-            label="Royalty"
-            value={royaltyLabel(
-              profile.royalty
-            )}
-          />
-
-          <Row
-            label="Directs"
-            value={String(
-              profile.directCount
-            )}
-          />
-
-          <Row
-            label="Active Directs"
-            value={String(
-              profile.activeDirectCount
-            )}
-          />
-
+          <Row label="Rank" value={rankLabel(profile.rank)} />
+          <Row label="Royalty" value={royaltyLabel(profile.royalty)} />
+          <Row label="Directs" value={String(profile.directCount)} />
+          <Row label="Active Directs" value={String(profile.activeDirectCount)} />
           <button
             className="secondary full"
-            onClick={() =>
-              setSection(
-                "referral"
-              )
-            }
+            onClick={() => setSection("referral")}
           >
             Open Referral Center
           </button>
@@ -3498,28 +3534,34 @@ function Packages({
               MAX_MULTIPLIER
             );
 
+          // The package reaches 2× after receiving ROI equal to
+          // the original stake. For a $50 package at 0.50%/day:
+          // $0.25/day × 200 days = $50 ROI.
+          const roiTarget = item.amount;
+          const roiPaid = item.roiPaid.gt(roiTarget)
+            ? roiTarget
+            : item.roiPaid;
+
           const dailyROI =
             item.amount
               .mul(config.roiBps)
               .div(10000);
 
           const progress =
-            target.gt(0)
+            roiTarget.gt(0)
               ? Math.min(
                   100,
                   Number(
-                    item.roiPaid
+                    roiPaid
                       .mul(100)
-                      .div(target)
+                      .div(roiTarget)
                   )
                 )
               : 0;
 
           const remaining =
-            target.gt(item.roiPaid)
-              ? target.sub(
-                  item.roiPaid
-                )
+            roiTarget.gt(roiPaid)
+              ? roiTarget.sub(roiPaid)
               : ZERO;
 
           const daysTo2x =
@@ -3567,7 +3609,7 @@ function Packages({
                 <Row
                   label="ROI Received"
                   value={`${money(
-                    item.roiPaid
+                    roiPaid
                   )} USDT`}
                 />
 
@@ -5813,6 +5855,50 @@ code{
   .walletActions{
     flex-wrap:wrap;
     justify-content:flex-end;
+  }
+}
+
+.packageHero{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  padding:18px;
+  margin-bottom:18px;
+  background:#070d17;
+  border:1px solid #1b2a40;
+  border-radius:12px;
+}
+
+.packageHero strong{
+  display:block;
+  margin-top:7px;
+  font-size:28px;
+}
+
+.packageHero small{
+  display:block;
+  margin-top:5px;
+  color:#71809a;
+}
+
+.packageMetrics{
+  margin-bottom:4px;
+}
+
+.packageActions{
+  display:flex;
+  gap:10px;
+  margin-top:8px;
+}
+
+@media(max-width:600px){
+  .packageHero{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .packageActions{
+    flex-direction:column;
   }
 }
 
