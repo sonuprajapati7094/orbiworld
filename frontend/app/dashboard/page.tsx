@@ -104,15 +104,6 @@ type PackageRow = {
   closeStatus?: number;
 };
 
-type AutomationStatus = {
-  enabled: boolean;
-  hasRole: boolean;
-  batchSize: ethers.BigNumber;
-  lastProcessingDay: ethers.BigNumber;
-  currentDay: ethers.BigNumber;
-  processedToday: boolean;
-};
-
 type WithdrawalRow = {
   requestId: string;
   walletType: number;
@@ -171,16 +162,6 @@ const ACCESS_CONTROL_ABI = [
   "function hasRole(bytes32 role,address account) view returns (bool)",
 ];
 
-const AUTOMATION_ABI = [
-  "function s_automationConfig() view returns (uint256 batchSize,bool automationEnabled)",
-  "function s_automationState() view returns (uint256 processingPointer,uint256 activePackageCount,uint256 lastProcessingDay,uint16 currentMonth,uint16 currentYear)",
-  "function hasRole(bytes32 role,address account) view returns (bool)",
-];
-
-const AUTOMATION_ROLE = ethers.utils.keccak256(
-  ethers.utils.toUtf8Bytes("AUTOMATION_ROLE")
-);
-
 const RANKS = [
   {
     name: "R1",
@@ -233,19 +214,6 @@ const ROYALTIES = [
     monthly: 10000,
     directs: 3,
   },
-];
-
-const LEVEL_INCOME = [
-  "10%",
-  "5%",
-  "3%",
-  "2%",
-  "1%",
-  "1%",
-  "1%",
-  "1%",
-  "1%",
-  "1%",
 ];
 
 /* =========================================================
@@ -461,9 +429,6 @@ export default function DashboardPage() {
   const [packages, setPackages] =
     useState<PackageRow[]>([]);
 
-  const [automationStatus, setAutomationStatus] =
-    useState<AutomationStatus | null>(null);
-
   const [withdrawals, setWithdrawals] =
     useState<WithdrawalRow[]>([]);
 
@@ -559,7 +524,6 @@ export default function DashboardPage() {
     setProfile(null);
 
     setPackages([]);
-    setAutomationStatus(null);
     setWithdrawals([]);
     setRankHistory([]);
     setRoyaltyHistory([]);
@@ -804,55 +768,89 @@ export default function DashboardPage() {
   );
 
   /* =======================================================
-     LOAD EVENTS
+     LOAD PACKAGES — DIRECT ON-CHAIN READ
+
+     Package history/state comes from contract storage only:
+     getUserPackages(userId)
+     getActiveUserPackages(userId)
+     getPackage(packageId)
+
+     No PackageActivated / PackageTopup / PackageClosed scans.
   ======================================================= */
 
-  const loadEvents = useCallback(
-    async (
-      c: ethers.Contract,
-      p: Profile
-    ) => {
+  const loadPackages = useCallback(
+    async (c: ethers.Contract, userId: ethers.BigNumber) => {
+      const [packageIdsRaw, activePackageIdsRaw] =
+        await Promise.all([
+          c.getUserPackages(userId),
+          c.getActiveUserPackages(userId),
+        ]);
+
+      const packageIds = (packageIdsRaw as any[]).map((id) =>
+        bn(id).toString()
+      );
+
+      const activePackageIds = new Set(
+        (activePackageIdsRaw as any[]).map((id) =>
+          bn(id).toString()
+        )
+      );
+
+      const packageRows: PackageRow[] = await Promise.all(
+        packageIds.map(async (packageId) => {
+          const pkg = await c.getPackage(packageId);
+
+          const id = bn(pkg.id ?? pkg[0]).toString();
+          const amount = bn(pkg.amount ?? pkg[2]);
+          const roiPaid = bn(pkg.roiPaid ?? pkg[4]);
+          const startTime = Number(pkg.startTime ?? pkg[7] ?? 0);
+          const status = Number(pkg.status ?? pkg[11] ?? 0);
+          const exists = Boolean(pkg.exists ?? pkg[14]);
+          const isActive = activePackageIds.has(id);
+
+          return {
+            packageId: id,
+            amount,
+            block: 0,
+            tx: '',
+            startTime,
+            roiPaid,
+            closed: !isActive || status !== 0 || !exists,
+          };
+        })
+      );
+
+      packageRows.sort(
+        (a, b) => Number(b.packageId) - Number(a.packageId)
+      );
+
+      setPackages(packageRows);
+    },
+    []
+  );
+
+  /* =======================================================
+     LOAD NON-PACKAGE HISTORY
+
+     Withdrawal / rank / royalty / team history still use events.
+     Package events are intentionally excluded.
+  ======================================================= */
+
+  const loadHistory = useCallback(
+    async (c: ethers.Contract, p: Profile) => {
       try {
-        const latest =
-          await c.provider.getBlockNumber();
+        const latest = await c.provider.getBlockNumber();
+        const historyFromBlock = Math.max(0, latest - 50000);
+        const chunkSize = 2000;
 
-        /*
-         * Keep the historical window bounded, but never send the
-         * whole window as one eth_getLogs request. Public BSC RPC
-         * endpoints can reject large log ranges.
-         */
-        const historyFromBlock =
-          Math.max(0, latest - 50000);
-
-        /*
-         * Query remaining historical logs in small chunks so public BSC
-         * RPC endpoints are less likely to reject large eth_getLogs ranges.
-         */
-        const safeQuery = async (
-          filter: any,
-          startBlock = historyFromBlock
-        ) => {
+        const safeQuery = async (filter: any) => {
           const results: any[] = [];
-          const chunkSize = 2000;
 
-          for (
-            let from = startBlock;
-            from <= latest;
-            from += chunkSize
-          ) {
-            const to = Math.min(
-              from + chunkSize - 1,
-              latest
-            );
+          for (let from = historyFromBlock; from <= latest; from += chunkSize) {
+            const to = Math.min(from + chunkSize - 1, latest);
 
             try {
-              const chunk =
-                await c.queryFilter(
-                  filter,
-                  from,
-                  to
-                );
-
+              const chunk = await c.queryFilter(filter, from, to);
               results.push(...chunk);
             } catch (queryError) {
               console.warn(
@@ -864,122 +862,6 @@ export default function DashboardPage() {
 
           return results;
         };
-
-        /* =================================================
-           PACKAGES — DIRECT ON-CHAIN READ
-
-           Source of truth:
-           getUserPackages(userId)
-           getActiveUserPackages(userId)
-           getPackage(packageId)
-
-           PackageActivated / PackageTopup / PackageClosed events are
-           intentionally NOT scanned here. Package state lives in the
-           deployed contract storage and these helpers read that state
-           directly.
-        ================================================= */
-
-        const packageIdsRaw =
-          await c.getUserPackages(p.id);
-
-        const activePackageIdsRaw =
-          await c.getActiveUserPackages(p.id);
-
-        const packageIds =
-          (packageIdsRaw as any[]).map(
-            (id) => bn(id).toString()
-          );
-
-        const activePackageIds =
-          new Set(
-            (activePackageIdsRaw as any[]).map(
-              (id) => bn(id).toString()
-            )
-          );
-
-        const packageRows: PackageRow[] =
-          await Promise.all(
-            packageIds.map(
-              async (packageId) => {
-                const pkg =
-                  await c.getPackage(packageId);
-
-                const id =
-                  bn(
-                    pkg.id ??
-                      pkg[0]
-                  ).toString();
-
-                const amount =
-                  bn(
-                    pkg.amount ??
-                      pkg[2]
-                  );
-
-                const roiPaid =
-                  bn(
-                    pkg.roiPaid ??
-                      pkg[4]
-                  );
-
-                const startTime =
-                  Number(
-                    pkg.startTime ??
-                      pkg[7] ??
-                      0
-                  );
-
-                const status =
-                  Number(
-                    pkg.status ??
-                      pkg[11] ??
-                      0
-                  );
-
-                const exists =
-                  Boolean(
-                    pkg.exists ??
-                      pkg[14]
-                  );
-
-                /*
-                 * Contract PackageStatus:
-                 * 0 = ACTIVE
-                 * 1 = CLOSED
-                 *
-                 * ACTIVE package IDs are also maintained by
-                 * s_activeUserPackages and exposed through
-                 * getActiveUserPackages().
-                 */
-                const isActive =
-                  activePackageIds.has(id);
-
-                return {
-                  packageId: id,
-                  amount,
-                  block: 0,
-                  tx: "",
-                  startTime,
-                  roiPaid,
-                  closed:
-                    !isActive ||
-                    status !== 0 ||
-                    !exists,
-                };
-              }
-            )
-          );
-
-        /*
-         * Newest package first.
-         */
-        packageRows.sort(
-          (a, b) =>
-            Number(b.packageId) -
-            Number(a.packageId)
-        );
-
-        setPackages(packageRows);
 
         const [
           requested,
@@ -999,7 +881,6 @@ export default function DashboardPage() {
               null
             )
           ),
-
           safeQuery(
             c.filters.WithdrawalApproved(
               null,
@@ -1007,14 +888,12 @@ export default function DashboardPage() {
               null
             )
           ),
-
           safeQuery(
             c.filters.WithdrawRejected(
               null,
               p.id
             )
           ),
-
           safeQuery(
             c.filters.RankRewardPaid(
               p.id,
@@ -1022,7 +901,6 @@ export default function DashboardPage() {
               null
             )
           ),
-
           safeQuery(
             c.filters.RoyaltyDistributed(
               p.id,
@@ -1030,7 +908,6 @@ export default function DashboardPage() {
               null
             )
           ),
-
           safeQuery(
             c.filters.UserRegistered(
               null,
@@ -1040,286 +917,96 @@ export default function DashboardPage() {
           ),
         ]);
 
-               /*
-         * Everything below this point is unchanged: automation,
-         * withdrawals, rank, royalty and team history.
-         */
+        const withdrawalMap = new Map<string, WithdrawalRow>();
 
-        try {
-          const automation =
-            new ethers.Contract(
-              CONTRACT_ADDRESS,
-              AUTOMATION_ABI,
-              c.provider
-            );
-
-          const [
-            automationConfig,
-            automationState,
-            hasAutomationRole,
-          ] = await Promise.all([
-            automation.s_automationConfig(),
-            automation.s_automationState(),
-            automation.hasRole(
-              AUTOMATION_ROLE,
-              account
-            ),
-          ]);
-
-          const currentDay =
-            Math.floor(
-              Date.now() / 86400000
-            );
-
-          const lastProcessingDay =
-            bn(
-              automationState.lastProcessingDay ??
-                automationState[2]
-            );
-
-          setAutomationStatus({
-            enabled: Boolean(
-              automationConfig.automationEnabled ??
-                automationConfig[1]
-            ),
-            hasRole: Boolean(
-              hasAutomationRole
-            ),
-            batchSize: bn(
-              automationConfig.batchSize ??
-                automationConfig[0]
-            ),
-            lastProcessingDay,
-            currentDay: ethers.BigNumber.from(
-              currentDay
-            ),
-            processedToday:
-              lastProcessingDay.eq(
-                currentDay
-              ),
-          });
-        } catch (automationError) {
-          console.error(
-            "Automation status read failed:",
-            automationError
-          );
-          setAutomationStatus(null);
-        }
-
-        /* =================================================
-           WITHDRAWALS
-        ================================================= */
-        const withdrawalMap =
-          new Map<
-            string,
-            WithdrawalRow
-          >();
-
-        for (
-          const event of requested as any[]
-        ) {
-          const args =
-            event.args;
-
-          const id =
-            bn(
-              args.requestId ??
-                args[0]
-            ).toString();
+        for (const event of requested as any[]) {
+          const args = event.args;
+          const id = bn(args.requestId ?? args[0]).toString();
 
           withdrawalMap.set(id, {
             requestId: id,
-            walletType:
-              Number(
-                args.walletType ??
-                  args[2]
-              ),
-            amount:
-              bn(
-                args.amount ??
-                  args[3]
-              ),
-            fee:
-              bn(
-                args.fee ??
-                  args[4]
-              ),
-            netAmount:
-              bn(
-                args.netAmount ??
-                  args[5]
-              ),
-            block:
-              event.blockNumber,
-            tx:
-              event.transactionHash,
-            status:
-              "PENDING",
+            walletType: Number(args.walletType ?? args[2]),
+            amount: bn(args.amount ?? args[3]),
+            fee: bn(args.fee ?? args[4]),
+            netAmount: bn(args.netAmount ?? args[5]),
+            block: event.blockNumber,
+            tx: event.transactionHash,
+            status: 'PENDING',
           });
         }
 
-        for (
-          const event of approved as any[]
-        ) {
-          const id =
-            bn(
-              event.args.requestId ??
-                event.args[0]
-            ).toString();
-
-          const row =
-            withdrawalMap.get(id);
-
-          if (row) {
-            row.status =
-              "APPROVED";
-          }
+        for (const event of approved as any[]) {
+          const id = bn(event.args.requestId ?? event.args[0]).toString();
+          const row = withdrawalMap.get(id);
+          if (row) row.status = 'APPROVED';
         }
 
-        for (
-          const event of rejected as any[]
-        ) {
-          const id =
-            bn(
-              event.args.requestId ??
-                event.args[0]
-            ).toString();
-
-          const row =
-            withdrawalMap.get(id);
-
-          if (row) {
-            row.status =
-              "REJECTED";
-          }
+        for (const event of rejected as any[]) {
+          const id = bn(event.args.requestId ?? event.args[0]).toString();
+          const row = withdrawalMap.get(id);
+          if (row) row.status = 'REJECTED';
         }
 
         setWithdrawals(
-          Array.from(
-            withdrawalMap.values()
-          ).sort(
-            (a, b) =>
-              b.block - a.block
+          Array.from(withdrawalMap.values()).sort(
+            (a, b) => b.block - a.block
           )
         );
 
-        /* =================================================
-           RANK HISTORY
-        ================================================= */
         setRankHistory(
           (rankEvents as any[])
             .map((event) => ({
-              rank: Number(
-                event.args.rank ??
-                  event.args[1]
-              ),
-              reward:
-                bn(
-                  event.args.reward ??
-                    event.args[2]
-                ),
-              block:
-                event.blockNumber,
-              tx:
-                event.transactionHash,
+              rank: Number(event.args.rank ?? event.args[1]),
+              reward: bn(event.args.reward ?? event.args[2]),
+              block: event.blockNumber,
+              tx: event.transactionHash,
             }))
             .reverse()
         );
 
-        /* =================================================
-           ROYALTY HISTORY
-        ================================================= */
         setRoyaltyHistory(
           (royaltyEvents as any[])
             .map((event) => ({
-              level:
-                Number(
-                  event.args
-                    .royaltyLevel ??
-                    event.args[1]
-                ),
-              amount:
-                bn(
-                  event.args.amount ??
-                    event.args[2]
-                ),
-              block:
-                event.blockNumber,
-              tx:
-                event.transactionHash,
+              level: Number(
+                event.args.royaltyLevel ?? event.args[1]
+              ),
+              amount: bn(event.args.amount ?? event.args[2]),
+              block: event.blockNumber,
+              tx: event.transactionHash,
             }))
             .reverse()
         );
 
-        /* =================================================
-           DIRECT TEAM
-        ================================================= */
-        const teamRows: TeamRow[] =
-          [];
+        const teamRows: TeamRow[] = [];
 
-        for (
-          const event of registered as any[]
-        ) {
-          const args =
-            event.args;
-
-          const id =
-            bn(
-              args.userId ??
-                args[0]
-            );
-
-          const wallet =
-            String(
-              args.wallet ??
-                args[1]
-            );
+        for (const event of registered as any[]) {
+          const args = event.args;
+          const id = bn(args.userId ?? args[0]);
+          const wallet = String(args.wallet ?? args[1]);
 
           try {
-            const rawUser =
-              await c.getUser(id);
+            const rawUser = await c.getUser(id);
 
             teamRows.push({
-              id:
-                id.toString(),
+              id: id.toString(),
               wallet,
-              sponsorId:
-                bn(
-                  rawUser.sponsorId ??
-                    rawUser[2]
-                ).toString(),
-              status:
-                Number(
-                  rawUser.status ??
-                    rawUser[3] ??
-                    0
-                ),
-              directCount:
-                Number(
-                  rawUser.directCount ??
-                    rawUser[4] ??
-                    0
-                ),
-              activeDirectCount:
-                Number(
-                  rawUser.activeDirectCount ??
-                    rawUser[5] ??
-                    0
-                ),
+              sponsorId: bn(rawUser.sponsorId ?? rawUser[2]).toString(),
+              status: Number(rawUser.status ?? rawUser[3] ?? 0),
+              directCount: Number(
+                rawUser.directCount ?? rawUser[4] ?? 0
+              ),
+              activeDirectCount: Number(
+                rawUser.activeDirectCount ?? rawUser[5] ?? 0
+              ),
             });
           } catch {
-            /* Ignore an individual broken team read. */
+            // Ignore an individual team read failure.
           }
         }
 
-        setTeam(
-          teamRows.reverse()
-        );
+        setTeam(teamRows.reverse());
       } catch (e) {
-        console.warn(
-          "Event loading failed:",
-          e
-        );
+        console.warn('History loading failed:', e);
       }
     },
     []
@@ -1504,10 +1191,10 @@ export default function DashboardPage() {
               ),
           };
 
-        await loadEvents(
-          contract,
-          currentProfile
-        );
+        await Promise.all([
+          loadPackages(contract, currentProfile.id),
+          loadHistory(contract, currentProfile),
+        ]);
       } catch (e: any) {
         setError(
           errorText(
@@ -1524,7 +1211,8 @@ export default function DashboardPage() {
       token,
       loadConfig,
       loadProfile,
-      loadEvents,
+      loadPackages,
+      loadHistory,
     ]);
 
   /* =======================================================
@@ -1981,124 +1669,12 @@ export default function DashboardPage() {
         "Top-up submitted..."
       );
 
-      const receipt =
-        await tx.wait();
+      await tx.wait();
 
-      /*
-       * Read the exact PackageTopup event from this confirmed receipt.
-       * This gives the UI the package immediately instead of waiting for
-       * a historical log scan. The same package is reconciled again by
-       * refresh() below.
-       */
-      try {
-        let topupPackage: PackageRow | null = null;
-
-        for (
-          const log of receipt.logs || []
-        ) {
-          try {
-            const parsed =
-              contract.interface.parseLog(
-                log
-              );
-
-            if (
-              parsed.name !==
-              "PackageTopup"
-            ) {
-              continue;
-            }
-
-            const packageId =
-              bn(
-                parsed.args.packageId ??
-                  parsed.args[0]
-              ).toString();
-
-            const topupAmount =
-              bn(
-                parsed.args.amount ??
-                  parsed.args[1]
-              );
-
-            const blockData =
-              await contract.provider.getBlock(
-                receipt.blockNumber
-              );
-
-            topupPackage = {
-              packageId,
-              amount: topupAmount,
-              block:
-                receipt.blockNumber,
-              tx:
-                receipt.transactionHash,
-              startTime: Number(
-                blockData?.timestamp ??
-                  0
-              ),
-              roiPaid: ZERO,
-              closed: false,
-            };
-
-            break;
-          } catch {
-            /* Ignore logs that are not ORBI events. */
-          }
-        }
-
-        if (topupPackage) {
-          setPackages(
-            (current) => {
-              const existing =
-                current.find(
-                  (item) =>
-                    item.packageId ===
-                    topupPackage!.packageId
-                );
-
-              if (existing) {
-                return current.map(
-                  (item) =>
-                    item.packageId ===
-                    topupPackage!.packageId
-                      ? {
-                          ...item,
-                          amount: item.amount.add(
-                            topupPackage!.amount
-                          ),
-                          block: topupPackage!.block,
-                          tx: topupPackage!.tx,
-                          startTime: topupPackage!.startTime,
-                        }
-                      : item
-                );
-              }
-
-              return [
-                topupPackage!,
-                ...current,
-              ].sort(
-                (a, b) =>
-                  Number(b.packageId) -
-                  Number(a.packageId)
-              );
-            }
-          );
-        }
-      } catch (receiptError) {
-        console.warn(
-          "Top-up receipt package parsing failed:",
-          receiptError
-        );
-      }
-
-      setStakeAmount(
-        ""
-      );
+      setStakeAmount("");
 
       notify(
-        "Top-up successful. Package updated."
+        "Top-up successful."
       );
 
       await refresh();
@@ -2527,9 +2103,6 @@ export default function DashboardPage() {
             packages={
               packages
             }
-            automationStatus={
-              automationStatus
-            }
             withdrawals={
               withdrawals
             }
@@ -2644,8 +2217,8 @@ function titleFor(
     referral:
       "Referral Center",
 
-    "level-income":
-      "Level Income",
+      "level-income":
+  "Level Income",
 
     rank:
       "Rank Center",
@@ -2819,7 +2392,6 @@ function DashboardContent(
     config,
     usdtBalance,
     packages,
-    automationStatus,
     withdrawals,
     rankHistory,
     royaltyHistory,
@@ -2856,8 +2428,6 @@ function DashboardContent(
             usdtBalance
           }
           total={total}
-          packages={packages}
-          config={config}
           setSection={
             setSection
           }
@@ -2883,7 +2453,6 @@ function DashboardContent(
             topUp
           }
           busy={busy}
-          automationStatus={automationStatus}
         />
       );
 
@@ -3034,19 +2603,15 @@ function DashboardContent(
                 </td>
 
                 <td>
-                  {item.tx ? (
-                    <a
-                      href={txUrl(
-                        item.tx
-                      )}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View
-                    </a>
-                  ) : (
-                    <span className="muted">On-chain</span>
-                  )}
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
                 </td>
               </tr>
             )
@@ -3265,68 +2830,8 @@ function Overview({
   profile,
   usdtBalance,
   total,
-  packages,
-  config,
   setSection,
 }: any) {
-  const activePackage =
-    (packages as PackageRow[]).find(
-      (item) => !item.closed
-    ) || packages?.[0];
-
-  const packageInfo = activePackage
-    ? (() => {
-        const target = activePackage.amount.mul(
-          MAX_MULTIPLIER
-        );
-
-        // The 2x target includes the original capital.
-        // ROI required to reach 2x = package amount.
-        const roiTarget = activePackage.amount;
-        const roiPaid = activePackage.roiPaid.gt(
-          roiTarget
-        )
-          ? roiTarget
-          : activePackage.roiPaid;
-
-        const remaining = roiTarget.gt(roiPaid)
-          ? roiTarget.sub(roiPaid)
-          : ZERO;
-
-        const dailyROI = activePackage.amount
-          .mul(config.roiBps)
-          .div(10000);
-
-        const daysRemaining = dailyROI.gt(0)
-          ? remaining
-              .add(dailyROI)
-              .sub(1)
-              .div(dailyROI)
-              .toNumber()
-          : 0;
-
-        const progress = roiTarget.gt(0)
-          ? Math.min(
-              100,
-              Number(
-                roiPaid
-                  .mul(100)
-                  .div(roiTarget)
-              )
-            )
-          : 0;
-
-        return {
-          target,
-          roiPaid,
-          remaining,
-          dailyROI,
-          daysRemaining,
-          progress,
-        };
-      })()
-    : null;
-
   return (
     <>
       <div className="welcome">
@@ -3336,36 +2841,58 @@ function Overview({
           </span>
 
           <h2>
-            Build your network. Grow your business.
+            Build your
+            network. Grow
+            your business.
           </h2>
 
           <p>
-            {statusLabel(profile.status)} • User #{profile.id.toString()}
+            {statusLabel(
+              profile.status
+            )}{" "}
+            • User #
+            {profile.id.toString()}
           </p>
         </div>
 
         <div className="walletBalance">
-          <small>USDT Wallet</small>
-          <b>{money(usdtBalance)}</b>
+          <small>
+            USDT Wallet
+          </small>
+
+          <b>
+            {money(
+              usdtBalance
+            )}
+          </b>
         </div>
       </div>
 
       <div className="grid four">
         <Metric
           title="Earning Wallet"
-          value={money(profile.earningWallet)}
+          value={money(
+            profile.earningWallet
+          )}
           sub="ROI + Level"
         />
+
         <Metric
           title="Rank Wallet"
-          value={money(profile.rankWallet)}
+          value={money(
+            profile.rankWallet
+          )}
           sub="Rank rewards"
         />
+
         <Metric
           title="Royalty Wallet"
-          value={money(profile.royaltyWallet)}
+          value={money(
+            profile.royaltyWallet
+          )}
           sub="Royalty income"
         />
+
         <Metric
           title="Total Available"
           value={money(total)}
@@ -3376,107 +2903,111 @@ function Overview({
       <div className="grid four">
         <Metric
           title="Lifetime ROI"
-          value={money(profile.totalROIIncome)}
+          value={money(
+            profile.totalROIIncome
+          )}
           sub="Cumulative"
         />
+
         <Metric
           title="Lifetime Level"
-          value={money(profile.totalLevelIncome)}
+          value={money(
+            profile.totalLevelIncome
+          )}
           sub="Cumulative"
         />
+
         <Metric
           title="Rank Rewards"
-          value={money(profile.totalRankIncome)}
+          value={money(
+            profile.totalRankIncome
+          )}
           sub="Cumulative"
         />
+
         <Metric
           title="Royalty Income"
-          value={money(profile.totalRoyaltyIncome)}
+          value={money(
+            profile.totalRoyaltyIncome
+          )}
           sub="Cumulative"
         />
       </div>
 
-      {packageInfo && activePackage && (
-        <Card title={`Active Package • #${activePackage.packageId}`}>
-          <div className="packageHero">
-            <div>
-              <span className="eyebrow">ACTIVE STAKING</span>
-              <strong>${money(activePackage.amount)} USDT</strong>
-              <small>Started from the confirmed on-chain activation transaction.</small>
-            </div>
-            <Pill value={activePackage.closed ? "CLOSED" : "ACTIVE"} />
-          </div>
-
-          <div className="grid four packageMetrics">
-            <Metric
-              title="Target (2×)"
-              value={`${money(packageInfo.target)} USDT`}
-              sub="Maximum package payout"
-            />
-            <Metric
-              title="ROI Received"
-              value={`${money(packageInfo.roiPaid)} USDT`}
-              sub="Actual ROI processed"
-            />
-            <Metric
-              title="Remaining ROI"
-              value={`${money(packageInfo.remaining)} USDT`}
-              sub="Until 2×"
-            />
-            <Metric
-              title="Days Remaining"
-              value={activePackage.closed ? "0" : String(packageInfo.daysRemaining)}
-              sub={activePackage.closed ? "Completed" : "Based on actual ROI"}
-            />
-          </div>
-
-          <Progress
-            label="Progress to 2×"
-            value={packageInfo.progress}
-          />
-
-          <div className="packageActions">
-            <button
-              className="secondary"
-              onClick={() => setSection("packages")}
-            >
-              Open My Packages
-            </button>
-            <button
-              className="secondary"
-              onClick={() => setSection("history-staking")}
-            >
-              Staking History
-            </button>
-          </div>
-        </Card>
-      )}
-
-      {!activePackage && (
-        <Card title="Active Package">
-          <p className="muted">
-            No active package detected yet. After a confirmed staking transaction, this card will update automatically.
-          </p>
-        </Card>
-      )}
-
       <div className="two">
         <Card title="Business Snapshot">
-          <Row label="Today Business" value={`${money(profile.todayBusiness)} USDT`} />
-          <Row label="30-Day Business" value={`${money(profile.monthlyBusiness)} USDT`} />
-          <Row label="Lifetime Business" value={`${money(profile.lifetimeBusiness)} USDT`} />
-          <Row label="Power Leg" value={`${money(profile.powerLegBusiness)} USDT`} />
-          <Row label="Other Leg" value={`${money(profile.otherLegBusiness)} USDT`} />
+          <Row
+            label="Today Business"
+            value={`${money(
+              profile.todayBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="30-Day Business"
+            value={`${money(
+              profile.monthlyBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Lifetime Business"
+            value={`${money(
+              profile.lifetimeBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Power Leg"
+            value={`${money(
+              profile.powerLegBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Other Leg"
+            value={`${money(
+              profile.otherLegBusiness
+            )} USDT`}
+          />
         </Card>
 
         <Card title="Current Qualification">
-          <Row label="Rank" value={rankLabel(profile.rank)} />
-          <Row label="Royalty" value={royaltyLabel(profile.royalty)} />
-          <Row label="Directs" value={String(profile.directCount)} />
-          <Row label="Active Directs" value={String(profile.activeDirectCount)} />
+          <Row
+            label="Rank"
+            value={rankLabel(
+              profile.rank
+            )}
+          />
+
+          <Row
+            label="Royalty"
+            value={royaltyLabel(
+              profile.royalty
+            )}
+          />
+
+          <Row
+            label="Directs"
+            value={String(
+              profile.directCount
+            )}
+          />
+
+          <Row
+            label="Active Directs"
+            value={String(
+              profile.activeDirectCount
+            )}
+          />
+
           <button
             className="secondary full"
-            onClick={() => setSection("referral")}
+            onClick={() =>
+              setSection(
+                "referral"
+              )
+            }
           >
             Open Referral Center
           </button>
@@ -3498,7 +3029,6 @@ function Packages({
   activate,
   topUp,
   busy,
-  automationStatus,
 }: any) {
   return (
     <>
@@ -3541,19 +3071,18 @@ function Packages({
 
       <div className="grid four">
         <Metric
-  title="Actual ROI Received"
-  value={`${money(
-    packages.reduce(
-      (
-        total: ethers.BigNumber,
-        item: PackageRow
-      ) =>
-        total.add(item.roiPaid),
-      ZERO
-    )
-  )} USDT`}
-  sub="From DailyROIProcessed events"
-/>
+          title="Actual ROI Received"
+          value={`${money(
+            packages.reduce(
+  (
+    total: ethers.BigNumber,
+    item: PackageRow
+  ) => total.add(item.roiPaid),
+  ZERO
+)
+          )} USDT`}
+          sub="From package struct (roiPaid)"
+        />
 
         <Metric
           title="Package Count"
@@ -3623,34 +3152,28 @@ function Packages({
               MAX_MULTIPLIER
             );
 
-          // The package reaches 2× after receiving ROI equal to
-          // the original stake. For a $50 package at 0.50%/day:
-          // $0.25/day × 200 days = $50 ROI.
-          const roiTarget = item.amount;
-          const roiPaid = item.roiPaid.gt(roiTarget)
-            ? roiTarget
-            : item.roiPaid;
-
           const dailyROI =
             item.amount
               .mul(config.roiBps)
               .div(10000);
 
           const progress =
-            roiTarget.gt(0)
+            target.gt(0)
               ? Math.min(
                   100,
                   Number(
-                    roiPaid
+                    item.roiPaid
                       .mul(100)
-                      .div(roiTarget)
+                      .div(target)
                   )
                 )
               : 0;
 
           const remaining =
-            roiTarget.gt(roiPaid)
-              ? roiTarget.sub(roiPaid)
+            target.gt(item.roiPaid)
+              ? target.sub(
+                  item.roiPaid
+                )
               : ZERO;
 
           const daysTo2x =
@@ -3698,7 +3221,7 @@ function Packages({
                 <Row
                   label="ROI Received"
                   value={`${money(
-                    roiPaid
+                    item.roiPaid
                   )} USDT`}
                 />
 
@@ -3727,79 +3250,16 @@ function Packages({
 
                 <p className="muted">
                   Progress and days-to-2× are
-                  calculated from actual
-                  DailyROIProcessed events.
+                  calculated from the package
+                  struct stored on-chain.
                 </p>
 
-                {item.tx ? (
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View activation transaction ↗
-                  </a>
-                ) : (
-                  <span className="muted">
-                    Package data read directly from contract storage.
-                  </span>
-                )}
+                <p className="muted">
+                  Package data is read directly from contract storage.
+                </p>
               </Card>
 
-              <Card title="ROI Automation">
-                {automationStatus ? (
-                  <>
-                    <Row
-                      label="Automation"
-                      value={
-                        automationStatus.enabled
-                          ? "Enabled"
-                          : "Disabled"
-                      }
-                    />
 
-                    <Row
-                      label="Automation Role"
-                      value={
-                        automationStatus.hasRole
-                          ? "Present"
-                          : "Not assigned"
-                      }
-                    />
-
-                    <Row
-                      label="Last Processing"
-                      value={
-                        automationStatus.processedToday
-                          ? "Processed today"
-                          : "Not processed today"
-                      }
-                    />
-
-                    <Row
-                      label="Batch Size"
-                      value={automationStatus.batchSize.toString()}
-                    />
-
-                    <p className="muted">
-                      If this says
-                      "Not processed today" and
-                      ROI Received is 0 after a
-                      completed 24-hour cycle,
-                      processDailyROI has not
-                      credited this package yet.
-                    </p>
-                  </>
-                ) : (
-                  <p className="muted">
-                    Automation status could not
-                    be read from the deployed
-                    contract.
-                  </p>
-                )}
-              </Card>
             </div>
           );
         }
@@ -3808,8 +3268,8 @@ function Packages({
       {packages.length === 0 && (
         <Card title="Staking Info">
           <p className="muted">
-            No package was found in the
-            deployed contract storage for this wallet.
+            No staking packages were found
+            for this wallet on-chain.
           </p>
         </Card>
       )}
@@ -3897,6 +3357,10 @@ function Earnings({
     </>
   );
 }
+
+/* =========================================================
+   LEVEL INCOME
+========================================================= */
 
 /* =========================================================
    LEVEL INCOME
@@ -4050,11 +3514,18 @@ function LevelIncome({
       <span>STATUS</span>
     </div>
 
-    {LEVEL_INCOME.map((percent, index) => {
-      const item = {
-        level: index + 1,
-        percent,
-      };
+    {[
+      { level: 1, percent: "10%" },
+      { level: 2, percent: "5%" },
+      { level: 3, percent: "3%" },
+      { level: 4, percent: "2%" },
+      { level: 5, percent: "1%" },
+      { level: 6, percent: "1%" },
+      { level: 7, percent: "1%" },
+      { level: 8, percent: "1%" },
+      { level: 9, percent: "1%" },
+      { level: 10, percent: "1%" },
+    ].map((item) => {
       const isOpen =
         Number(profile.activeDirectCount || 0) >= item.level;
 
@@ -4982,7 +4453,7 @@ function History({
                   }
                 >
                   <Empty
-                    text="No records found in the available on-chain history."
+                    text="No records found in the scanned block range."
                   />
                 </td>
               </tr>
@@ -5939,50 +5410,6 @@ code{
   .walletActions{
     flex-wrap:wrap;
     justify-content:flex-end;
-  }
-}
-
-.packageHero{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:20px;
-  padding:18px;
-  margin-bottom:18px;
-  background:#070d17;
-  border:1px solid #1b2a40;
-  border-radius:12px;
-}
-
-.packageHero strong{
-  display:block;
-  margin-top:7px;
-  font-size:28px;
-}
-
-.packageHero small{
-  display:block;
-  margin-top:5px;
-  color:#71809a;
-}
-
-.packageMetrics{
-  margin-bottom:4px;
-}
-
-.packageActions{
-  display:flex;
-  gap:10px;
-  margin-top:8px;
-}
-
-@media(max-width:600px){
-  .packageHero{
-    align-items:flex-start;
-    flex-direction:column;
-  }
-  .packageActions{
-    flex-direction:column;
   }
 }
 
