@@ -816,20 +816,68 @@ export default function DashboardPage() {
          */
         const packageFromBlock = historyFromBlock;
 
-        const query = async (
+        /*
+         * IMPORTANT: never let one optional history query prevent
+         * package loading. Some public BSC RPC endpoints reject large
+         * eth_getLogs requests or specific indexed-topic combinations.
+         * Every query therefore fails independently and returns [].
+         */
+        const safeQuery = async (
           filter: any,
           startBlock = historyFromBlock
         ) => {
-          return c.queryFilter(
-            filter,
-            startBlock,
-            latest
-          );
+          try {
+            return await c.queryFilter(
+              filter,
+              startBlock,
+              latest
+            );
+          } catch (queryError) {
+            console.warn(
+              "History query failed:",
+              queryError
+            );
+            return [];
+          }
         };
 
+        /*
+         * PackageActivated is the source of truth for the first stake.
+         * Query the event without the userId topic and filter locally.
+         * This is more reliable across BSC RPC implementations than
+         * passing a BigNumber/string into an indexed topic filter.
+         */
+        const activatedAll = await safeQuery(
+          c.filters.PackageActivated(),
+          packageFromBlock
+        );
+
+        const activated = (activatedAll as any[]).filter(
+          (event) =>
+            String(
+              event.args?.userId ??
+                event.args?.[1] ??
+                ""
+            ).toLowerCase() ===
+            p.id.toString().toLowerCase()
+        );
+
+        const closedAll = await safeQuery(
+          c.filters.PackageClosed(),
+          packageFromBlock
+        );
+
+        const closed = (closedAll as any[]).filter(
+          (event) =>
+            String(
+              event.args?.userId ??
+                event.args?.[1] ??
+                ""
+            ).toLowerCase() ===
+            p.id.toString().toLowerCase()
+        );
+
         const [
-          activated,
-          closed,
           requested,
           approved,
           rejected,
@@ -837,25 +885,7 @@ export default function DashboardPage() {
           royaltyEvents,
           registered,
         ] = await Promise.all([
-          query(
-            c.filters.PackageActivated(
-              null,
-              p.id,
-              null
-            ),
-            packageFromBlock
-          ),
-
-          query(
-            c.filters.PackageClosed(
-              null,
-              p.id,
-              null
-            ),
-            packageFromBlock
-          ),
-
-          query(
+          safeQuery(
             c.filters.WithdrawalRequested(
               null,
               p.id,
@@ -866,7 +896,7 @@ export default function DashboardPage() {
             )
           ),
 
-          query(
+          safeQuery(
             c.filters.WithdrawalApproved(
               null,
               p.id,
@@ -874,14 +904,14 @@ export default function DashboardPage() {
             )
           ),
 
-          query(
+          safeQuery(
             c.filters.WithdrawRejected(
               null,
               p.id
             )
           ),
 
-          query(
+          safeQuery(
             c.filters.RankRewardPaid(
               p.id,
               null,
@@ -889,7 +919,7 @@ export default function DashboardPage() {
             )
           ),
 
-          query(
+          safeQuery(
             c.filters.RoyaltyDistributed(
               p.id,
               null,
@@ -897,7 +927,7 @@ export default function DashboardPage() {
             )
           ),
 
-          query(
+          safeQuery(
             c.filters.UserRegistered(
               null,
               null,
@@ -997,12 +1027,11 @@ export default function DashboardPage() {
                 roiLogs,
                 blockData,
               ] = await Promise.all([
-                c.queryFilter(
+                safeQuery(
                   c.filters.DailyROIProcessed(
                     row.packageId
                   ),
-                  packageFromBlock,
-                  latest
+                  packageFromBlock
                 ),
                 c.provider.getBlock(
                   row.block
