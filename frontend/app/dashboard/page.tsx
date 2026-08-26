@@ -235,6 +235,19 @@ const ROYALTIES = [
   },
 ];
 
+const LEVEL_INCOME = [
+  "10%",
+  "5%",
+  "3%",
+  "2%",
+  "1%",
+  "1%",
+  "1%",
+  "1%",
+  "1%",
+  "1%",
+];
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -811,11 +824,9 @@ export default function DashboardPage() {
         const historyFromBlock =
           Math.max(0, latest - 50000);
 
-        const packageFromBlock = historyFromBlock;
-
         /*
-         * Query logs in small chunks. This is the important fix for
-         * packages disappearing when a single large query is rejected.
+         * Query remaining historical logs in small chunks so public BSC
+         * RPC endpoints are less likely to reject large eth_getLogs ranges.
          */
         const safeQuery = async (
           filter: any,
@@ -854,108 +865,121 @@ export default function DashboardPage() {
           return results;
         };
 
-        /*
-         * PackageActivated is the source of truth for packages created
-         * by activateAccount(). It contains indexed userId, so filter
-         * the returned events to this profile.
-         */
-        const activatedAll = await safeQuery(
-          c.filters.PackageActivated(),
-          packageFromBlock
-        );
+        /* =================================================
+           PACKAGES — DIRECT ON-CHAIN READ
 
-        const activated = (activatedAll as any[]).filter(
-          (event) =>
-            String(
-              event.args?.userId ??
-                event.args?.[1] ??
-                ""
-            ).toLowerCase() ===
-            p.id.toString().toLowerCase()
-        );
+           Source of truth:
+           getUserPackages(userId)
+           getActiveUserPackages(userId)
+           getPackage(packageId)
 
-        const closedAll = await safeQuery(
-          c.filters.PackageClosed(),
-          packageFromBlock
-        );
+           PackageActivated / PackageTopup / PackageClosed events are
+           intentionally NOT scanned here. Package state lives in the
+           deployed contract storage and these helpers read that state
+           directly.
+        ================================================= */
 
-        const closed = (closedAll as any[]).filter(
-          (event) =>
-            String(
-              event.args?.userId ??
-                event.args?.[1] ??
-                ""
-            ).toLowerCase() ===
-            p.id.toString().toLowerCase()
-        );
+        const packageIdsRaw =
+          await c.getUserPackages(p.id);
 
-        /*
-         * PackageTopup has no userId in the event. We therefore identify
-         * the owner from the transaction sender. A topUp transaction is
-         * sent by the wallet that owns the package.
-         */
-        const topupAll = await safeQuery(
-          c.filters.PackageTopup(),
-          packageFromBlock
-        );
+        const activePackageIdsRaw =
+          await c.getActiveUserPackages(p.id);
 
-        const topupTransactions = new Map<
-          string,
-          string | null
-        >();
+        const packageIds =
+          (packageIdsRaw as any[]).map(
+            (id) => bn(id).toString()
+          );
 
-        await Promise.all(
-          (topupAll as any[]).map(
-            async (event) => {
-              const hash =
-                event.transactionHash;
+        const activePackageIds =
+          new Set(
+            (activePackageIdsRaw as any[]).map(
+              (id) => bn(id).toString()
+            )
+          );
 
-              if (
-                !hash ||
-                topupTransactions.has(hash)
-              ) {
-                return;
-              }
+        const packageRows: PackageRow[] =
+          await Promise.all(
+            packageIds.map(
+              async (packageId) => {
+                const pkg =
+                  await c.getPackage(packageId);
 
-              try {
-                const tx =
-                  await c.provider.getTransaction(
-                    hash
+                const id =
+                  bn(
+                    pkg.id ??
+                      pkg[0]
+                  ).toString();
+
+                const amount =
+                  bn(
+                    pkg.amount ??
+                      pkg[2]
                   );
 
-                topupTransactions.set(
-                  hash,
-                  tx?.from ?? null
-                );
-              } catch (txError) {
-                console.warn(
-                  "Top-up transaction sender read failed:",
-                  txError
-                );
+                const roiPaid =
+                  bn(
+                    pkg.roiPaid ??
+                      pkg[4]
+                  );
 
-                topupTransactions.set(
-                  hash,
-                  null
-                );
+                const startTime =
+                  Number(
+                    pkg.startTime ??
+                      pkg[7] ??
+                      0
+                  );
+
+                const status =
+                  Number(
+                    pkg.status ??
+                      pkg[11] ??
+                      0
+                  );
+
+                const exists =
+                  Boolean(
+                    pkg.exists ??
+                      pkg[14]
+                  );
+
+                /*
+                 * Contract PackageStatus:
+                 * 0 = ACTIVE
+                 * 1 = CLOSED
+                 *
+                 * ACTIVE package IDs are also maintained by
+                 * s_activeUserPackages and exposed through
+                 * getActiveUserPackages().
+                 */
+                const isActive =
+                  activePackageIds.has(id);
+
+                return {
+                  packageId: id,
+                  amount,
+                  block: 0,
+                  tx: "",
+                  startTime,
+                  roiPaid,
+                  closed:
+                    !isActive ||
+                    status !== 0 ||
+                    !exists,
+                };
               }
-            }
-          )
+            )
+          );
+
+        /*
+         * Newest package first.
+         */
+        packageRows.sort(
+          (a, b) =>
+            Number(b.packageId) -
+            Number(a.packageId)
         );
 
-        const topups = (topupAll as any[]).filter(
-          (event) => {
-            const sender =
-              topupTransactions.get(
-                event.transactionHash
-              );
-
-            return Boolean(
-              sender &&
-              sender.toLowerCase() ===
-                p.wallet.toLowerCase()
-            );
-          }
-        );
+        setPackages(packageRows);
 
         const [
           requested,
@@ -1016,119 +1040,7 @@ export default function DashboardPage() {
           ),
         ]);
 
-       /* =================================================
-   PACKAGES — DIRECT ON-CHAIN READ
-   Source of truth:
-   getUserPackages(userId)
-   getActiveUserPackages(userId)
-   getPackage(packageId)
-
-   No PackageActivated / PackageTopup event scanning.
-================================================= */
-
-const packageIdsRaw =
-  await c.getUserPackages(p.id);
-
-const activePackageIdsRaw =
-  await c.getActiveUserPackages(p.id);
-
-const packageIds = (packageIdsRaw as any[]).map(
-  (id) => bn(id).toString()
-);
-
-const activePackageIds = new Set(
-  (activePackageIdsRaw as any[]).map(
-    (id) => bn(id).toString()
-  )
-);
-
-const packageRows: PackageRow[] =
-  await Promise.all(
-    packageIds.map(
-      async (packageId) => {
-        const pkg =
-          await c.getPackage(packageId);
-
-        const id =
-          bn(
-            pkg.id ??
-              pkg[0]
-          ).toString();
-
-        const amount =
-          bn(
-            pkg.amount ??
-              pkg[2]
-          );
-
-        const roiPaid =
-          bn(
-            pkg.roiPaid ??
-              pkg[4]
-          );
-
-        const startTime =
-          Number(
-            pkg.startTime ??
-              pkg[7] ??
-              0
-          );
-
-        const status =
-          Number(
-            pkg.status ??
-              pkg[11] ??
-              0
-          );
-
-        const exists =
-          Boolean(
-            pkg.exists ??
-              pkg[14]
-          );
-
-        /*
-         * Contract PackageStatus:
-         * 0 = NONE
-         * 1 = ACTIVE
-         * 2 = CLOSED
-         */
-        const isActive =
-          activePackageIds.has(id);
-
-        /*
-         * Package helper does not contain
-         * transactionHash/blockNumber.
-         * Therefore package data itself is
-         * read entirely from contract storage.
-         */
-        return {
-          packageId: id,
-          amount,
-          block: 0,
-          tx: "",
-          startTime,
-          roiPaid,
-          closed:
-            !isActive ||
-            status !== 1 ||
-            !exists,
-        };
-      }
-    )
-  );
-
-/*
- * Newest package first.
- */
-packageRows.sort(
-  (a, b) =>
-    Number(b.packageId) -
-    Number(a.packageId)
-);
-
-setPackages(packageRows);
-        /*
+               /*
          * Everything below this point is unchanged: automation,
          * withdrawals, rank, royalty and team history.
          */
@@ -3122,15 +3034,19 @@ function DashboardContent(
                 </td>
 
                 <td>
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
+                  {item.tx ? (
+                    <a
+                      href={txUrl(
+                        item.tx
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View
+                    </a>
+                  ) : (
+                    <span className="muted">On-chain</span>
+                  )}
                 </td>
               </tr>
             )
@@ -3815,15 +3731,21 @@ function Packages({
                   DailyROIProcessed events.
                 </p>
 
-                <a
-                  href={txUrl(
-                    item.tx
-                  )}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View activation transaction ↗
-                </a>
+                {item.tx ? (
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View activation transaction ↗
+                  </a>
+                ) : (
+                  <span className="muted">
+                    Package data read directly from contract storage.
+                  </span>
+                )}
               </Card>
 
               <Card title="ROI Automation">
@@ -3886,8 +3808,8 @@ function Packages({
       {packages.length === 0 && (
         <Card title="Staking Info">
           <p className="muted">
-            No PackageActivated event was found
-            for this wallet.
+            No package was found in the
+            deployed contract storage for this wallet.
           </p>
         </Card>
       )}
@@ -3975,10 +3897,6 @@ function Earnings({
     </>
   );
 }
-
-/* =========================================================
-   LEVEL INCOME
-========================================================= */
 
 /* =========================================================
    LEVEL INCOME
@@ -4132,18 +4050,11 @@ function LevelIncome({
       <span>STATUS</span>
     </div>
 
-    {[
-      { level: 1, percent: "10%" },
-      { level: 2, percent: "5%" },
-      { level: 3, percent: "3%" },
-      { level: 4, percent: "2%" },
-      { level: 5, percent: "2%" },
-      { level: 6, percent: "1%" },
-      { level: 7, percent: "1%" },
-      { level: 8, percent: "1%" },
-      { level: 9, percent: "0.5%" },
-      { level: 10, percent: "0.5%" },
-    ].map((item) => {
+    {LEVEL_INCOME.map((percent, index) => {
+      const item = {
+        level: index + 1,
+        percent,
+      };
       const isOpen =
         Number(profile.activeDirectCount || 0) >= item.level;
 
@@ -5071,7 +4982,7 @@ function History({
                   }
                 >
                   <Empty
-                    text="No records found in the scanned block range."
+                    text="No records found in the available on-chain history."
                   />
                 </td>
               </tr>
