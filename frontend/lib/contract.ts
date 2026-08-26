@@ -11,7 +11,7 @@ declare global {
    ========================================================= */
 
 export const CONTRACT_ADDRESS =
-  "0x85DBcA033F79018602f752Cf36a9b3683657f631";
+  "0x66Aad6c966C4A4E6B90E72388248A6d21c7944a6";
 
 export const USDT_ADDRESS =
   "0x855c91cF87745e01e370B671f0Da25dcC7685394";
