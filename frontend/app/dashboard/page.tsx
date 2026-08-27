@@ -1,25 +1,28 @@
 "use client";
 
-import {
+import React, {
   useCallback,
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from "react";
-
 import { ethers } from "ethers";
 
 import {
   CONTRACT_ADDRESS,
+  USDT_ADDRESS,
+  ORBI_ABI,
+  ERC20_ABI,
   BSC_TESTNET,
+  PackageStatus,
+  UserStatus,
   WalletType,
-  getContract,
-  getUSDTContract,
-  parseUSDT,
   formatUSDT,
+  parseUSDT,
   shortAddress,
   ensureBscTestnet,
+  getContract,
+  getUSDTContract,
 } from "../../lib/contract";
 
 /* =========================================================
@@ -29,25 +32,16 @@ import {
 type Section =
   | "overview"
   | "packages"
-  | "earnings"
   | "business"
+  | "earnings"
   | "referral"
-  | "level-income"
-  | "rank"
-  | "royalty"
   | "withdrawal"
-  | "emergency"
-  | "history-staking"
-  | "history-withdrawal"
-  | "history-rank"
-  | "history-royalty"
   | "profile";
 
-type Profile = {
+type UserData = {
   id: ethers.BigNumber;
   wallet: string;
   sponsorId: ethers.BigNumber;
-
   status: number;
 
   directCount: number;
@@ -75,371 +69,805 @@ type Profile = {
   royalty: number;
 };
 
-type Config = {
-  minStake: ethers.BigNumber;
-  minTopup: ethers.BigNumber;
-  minWithdrawal: ethers.BigNumber;
-
-  feeBps: number;
-  roiBps: number;
-
-  registrationEnabled: boolean;
-  stakingEnabled: boolean;
-  withdrawalEnabled: boolean;
-  capitalWithdrawalEnabled: boolean;
-
-  levelEnabled: boolean;
-  rankEnabled: boolean;
-  royaltyEnabled: boolean;
-};
-
-type PackageRow = {
+type PackageData = {
   packageId: string;
+  userId: string;
   amount: ethers.BigNumber;
-  block: number;
-  tx: string;
-  startTime: number;
+  maxPayout: ethers.BigNumber;
   roiPaid: ethers.BigNumber;
-  closed: boolean;
-  closeStatus?: number;
+  levelPaid: ethers.BigNumber;
+  totalPaid: ethers.BigNumber;
+  startTime: number;
+  lastProcessedDay: number;
+  closedTime: number;
+  emergencyClosed: boolean;
+  status: number;
+  queueIndex: number;
+  activeUserPackageIndex: number;
+  exists: boolean;
+  active: boolean;
 };
 
-type WithdrawalRow = {
-  requestId: string;
-  walletType: number;
-
-  amount: ethers.BigNumber;
-  fee: ethers.BigNumber;
-  netAmount: ethers.BigNumber;
-
-  block: number;
-  tx: string;
-
-  status: "PENDING" | "APPROVED" | "REJECTED";
-};
-
-type RankRow = {
-  rank: number;
-  reward: ethers.BigNumber;
-  block: number;
-  tx: string;
-};
-
-type RoyaltyRow = {
-  level: number;
-  amount: ethers.BigNumber;
-  block: number;
-  tx: string;
-};
-
-type TeamRow = {
+type DirectUser = {
   id: string;
   wallet: string;
   sponsorId: string;
   status: number;
   directCount: number;
   activeDirectCount: number;
+  lifetimeBusiness: ethers.BigNumber;
+  monthlyBusiness: ethers.BigNumber;
+  todayBusiness: ethers.BigNumber;
+  powerLegBusiness: ethers.BigNumber;
+  otherLegBusiness: ethers.BigNumber;
+  earningWallet: ethers.BigNumber;
+  rankWallet: ethers.BigNumber;
+  royaltyWallet: ethers.BigNumber;
+  totalROIIncome: ethers.BigNumber;
+  totalLevelIncome: ethers.BigNumber;
+  totalRankIncome: ethers.BigNumber;
+  totalRoyaltyIncome: ethers.BigNumber;
+  totalWithdrawn: ethers.BigNumber;
+  rank: number;
+  royalty: number;
 };
 
 /* =========================================================
    CONSTANTS
 ========================================================= */
 
+const LEVEL_PERCENTAGES = [
+  10,
+  5,
+  3,
+  2,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+];
+
 const ZERO = ethers.constants.Zero;
 
-const MAX_MULTIPLIER = 2;
+const EMPTY_USER: UserData = {
+  id: ZERO,
+  wallet: ethers.constants.AddressZero,
+  sponsorId: ZERO,
+  status: UserStatus.NONE,
 
-/*
- * AccessControl DEFAULT_ADMIN_ROLE = bytes32(0)
- */
-const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero;
+  directCount: 0,
+  activeDirectCount: 0,
 
-/*
- * Small ABI only for checking admin role.
- * No need to modify contract.ts.
- */
-const ACCESS_CONTROL_ABI = [
-  "function hasRole(bytes32 role,address account) view returns (bool)",
-];
+  lifetimeBusiness: ZERO,
+  monthlyBusiness: ZERO,
+  todayBusiness: ZERO,
 
-const RANKS = [
-  {
-    name: "R1",
-    power: 1500,
-    other: 1500,
-    reward: 150,
-  },
-  {
-    name: "R2",
-    power: 5000,
-    other: 5000,
-    reward: 300,
-  },
-  {
-    name: "R3",
-    power: 10000,
-    other: 10000,
-    reward: 500,
-  },
-  {
-    name: "R4",
-    power: 20000,
-    other: 20000,
-    reward: 1000,
-  },
-  {
-    name: "R5",
-    power: 50000,
-    other: 50000,
-    reward: 3000,
-  },
-  {
-    name: "R6",
-    power: 100000,
-    other: 100000,
-    reward: 5000,
-  },
-];
+  powerLegBusiness: ZERO,
+  otherLegBusiness: ZERO,
 
-const ROYALTIES = [
-  {
-    name: "1%",
-    lifetime: 25000,
-    monthly: 5000,
-    directs: 2,
-  },
-  {
-    name: "2%",
-    lifetime: 50000,
-    monthly: 10000,
-    directs: 3,
-  },
-];
+  earningWallet: ZERO,
+  rankWallet: ZERO,
+  royaltyWallet: ZERO,
+
+  totalROIIncome: ZERO,
+  totalLevelIncome: ZERO,
+  totalRankIncome: ZERO,
+  totalRoyaltyIncome: ZERO,
+
+  totalWithdrawn: ZERO,
+
+  rank: 0,
+  royalty: 0,
+};
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
 function bn(value: any): ethers.BigNumber {
-  try {
-    return ethers.BigNumber.from(value ?? 0);
-  } catch {
+  if (ethers.BigNumber.isBigNumber(value)) {
+    return value;
+  }
+
+  if (
+    value === undefined ||
+    value === null ||
+    value === ""
+  ) {
     return ZERO;
   }
+
+  return ethers.BigNumber.from(value);
 }
 
-function units(value: string) {
-  return parseUSDT(value || "0");
+function num(value: any): number {
+  return bn(value).toNumber();
 }
 
-function money(value: any) {
-  const number = Number(formatUSDT(bn(value)));
+function userFromTuple(raw: any): UserData {
+  return {
+    id: bn(raw.id ?? raw[0]),
+    wallet: raw.wallet ?? raw[1],
+    sponsorId: bn(
+      raw.sponsorId ?? raw[2]
+    ),
+    status: Number(
+      raw.status ?? raw[3] ?? 0
+    ),
 
-  if (!Number.isFinite(number)) {
-    return "0.00";
+    directCount: Number(
+      raw.directCount ?? raw[4] ?? 0
+    ),
+    activeDirectCount: Number(
+      raw.activeDirectCount ??
+        raw[5] ??
+        0
+    ),
+
+    lifetimeBusiness: bn(
+      raw.lifetimeBusiness ?? raw[6]
+    ),
+    monthlyBusiness: bn(
+      raw.monthlyBusiness ?? raw[7]
+    ),
+    todayBusiness: bn(
+      raw.todayBusiness ?? raw[8]
+    ),
+
+    powerLegBusiness: bn(
+      raw.powerLegBusiness ?? raw[9]
+    ),
+    otherLegBusiness: bn(
+      raw.otherLegBusiness ?? raw[10]
+    ),
+
+    earningWallet: bn(
+      raw.earningWallet ?? raw[11]
+    ),
+    rankWallet: bn(
+      raw.rankWallet ?? raw[12]
+    ),
+    royaltyWallet: bn(
+      raw.royaltyWallet ?? raw[13]
+    ),
+
+    totalROIIncome: bn(
+      raw.totalROIIncome ?? raw[14]
+    ),
+    totalLevelIncome: bn(
+      raw.totalLevelIncome ?? raw[15]
+    ),
+    totalRankIncome: bn(
+      raw.totalRankIncome ?? raw[16]
+    ),
+    totalRoyaltyIncome: bn(
+      raw.totalRoyaltyIncome ?? raw[17]
+    ),
+
+    totalWithdrawn: bn(
+      raw.totalWithdrawn ?? raw[18]
+    ),
+
+    rank: Number(
+      raw.rank ?? raw[19] ?? 0
+    ),
+    royalty: Number(
+      raw.royalty ?? raw[20] ?? 0
+    ),
+  };
+}
+
+function packageFromTuple(
+  raw: any,
+  activeIds: Set<string>
+): PackageData {
+  const packageId = bn(
+    raw.id ?? raw.packageId ?? raw[0]
+  );
+
+  const id = packageId.toString();
+
+  const status = Number(
+    raw.status ?? raw[11] ?? 0
+  );
+
+  return {
+    packageId: id,
+
+    userId: bn(
+      raw.userId ?? raw[1]
+    ).toString(),
+
+    amount: bn(
+      raw.amount ?? raw[2]
+    ),
+
+    maxPayout: bn(
+      raw.maxPayout ?? raw[3]
+    ),
+
+    roiPaid: bn(
+      raw.roiPaid ?? raw[4]
+    ),
+
+    levelPaid: bn(
+      raw.levelPaid ?? raw[5]
+    ),
+
+    totalPaid: bn(
+      raw.totalPaid ?? raw[6]
+    ),
+
+    startTime: num(
+      raw.startTime ?? raw[7]
+    ),
+
+    lastProcessedDay: num(
+      raw.lastProcessedDay ??
+        raw[8]
+    ),
+
+    closedTime: num(
+      raw.closedTime ?? raw[9]
+    ),
+
+    emergencyClosed:
+      Boolean(
+        raw.emergencyClosed ??
+          raw[10]
+      ),
+
+    status,
+
+    queueIndex: num(
+      raw.queueIndex ?? raw[12]
+    ),
+
+    activeUserPackageIndex:
+      num(
+        raw.activeUserPackageIndex ??
+          raw[13]
+      ),
+
+    exists: Boolean(
+      raw.exists ?? raw[14]
+    ),
+
+    active:
+      activeIds.has(id) &&
+      status ===
+        PackageStatus.ACTIVE &&
+      Boolean(
+        raw.exists ?? raw[14]
+      ),
+  };
+}
+
+function directUserFromTuple(
+  raw: any
+): DirectUser {
+  const user = userFromTuple(raw);
+
+  return {
+    id: user.id.toString(),
+    wallet: user.wallet,
+    sponsorId:
+      user.sponsorId.toString(),
+    status: user.status,
+    directCount:
+      user.directCount,
+    activeDirectCount:
+      user.activeDirectCount,
+
+    lifetimeBusiness:
+      user.lifetimeBusiness,
+    monthlyBusiness:
+      user.monthlyBusiness,
+    todayBusiness:
+      user.todayBusiness,
+
+    powerLegBusiness:
+      user.powerLegBusiness,
+    otherLegBusiness:
+      user.otherLegBusiness,
+
+    earningWallet:
+      user.earningWallet,
+    rankWallet:
+      user.rankWallet,
+    royaltyWallet:
+      user.royaltyWallet,
+
+    totalROIIncome:
+      user.totalROIIncome,
+    totalLevelIncome:
+      user.totalLevelIncome,
+    totalRankIncome:
+      user.totalRankIncome,
+    totalRoyaltyIncome:
+      user.totalRoyaltyIncome,
+
+    totalWithdrawn:
+      user.totalWithdrawn,
+
+    rank: user.rank,
+    royalty: user.royalty,
+  };
+}
+
+function formatDate(
+  timestamp: number
+): string {
+  if (!timestamp) {
+    return "—";
   }
 
-  return number.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function errorText(error: any, fallback: string) {
-  return (
-    error?.error?.message ||
-    error?.data?.message ||
-    error?.reason ||
-    error?.message ||
-    fallback
+  return new Date(
+    timestamp * 1000
+  ).toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }
   );
 }
 
-function statusLabel(status: number) {
-  return (
-    [
-      "NONE",
-      "INACTIVE",
-      "ACTIVE",
-      "EMERGENCY EXIT",
-      "BLACKLISTED",
-    ][status] || "UNKNOWN"
+function formatDateTime(
+  timestamp: number
+): string {
+  if (!timestamp) {
+    return "—";
+  }
+
+  return new Date(
+    timestamp * 1000
+  ).toLocaleString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }
   );
 }
 
-function rankLabel(rank: number) {
-  return rank === 0 ? "NONE" : `R${rank}`;
-}
+function statusLabel(
+  status: number
+): string {
+  switch (status) {
+    case UserStatus.ACTIVE:
+      return "ACTIVE";
 
-function royaltyLabel(level: number) {
-  if (level === 1) return "1%";
-  if (level === 2) return "2%";
-  return "NONE";
-}
+    case UserStatus.INACTIVE:
+      return "INACTIVE";
 
-function walletLabel(walletType: number) {
-  if (walletType === WalletType.EARNING) {
-    return "Earning";
+    case UserStatus.EMERGENCY_EXIT:
+      return "EMERGENCY EXIT";
+
+    case UserStatus.BLACKLISTED:
+      return "BLACKLISTED";
+
+    default:
+      return "NOT REGISTERED";
   }
-
-  if (walletType === WalletType.RANK) {
-    return "Rank";
-  }
-
-  return "Royalty";
-}
-
-function txUrl(hash: string) {
-  return `${BSC_TESTNET.explorer}/tx/${hash}`;
-}
-
-function addressUrl(address: string) {
-  return `${BSC_TESTNET.explorer}/address/${address}`;
 }
 
 /* =========================================================
-   NAVIGATION
+   SMALL UI COMPONENTS
 ========================================================= */
 
-const MAIN_NAV: {
-  id: Section;
+function StatCard({
+  label,
+  value,
+  sub,
+}: {
   label: string;
-  icon: string;
-}[] = [
-  {
-    id: "overview",
-    label: "Overview",
-    icon: "⌂",
-  },
-  {
-    id: "packages",
-    label: "My Packages",
-    icon: "▣",
-  },
-  {
-    id: "earnings",
-    label: "Earnings",
-    icon: "◈",
-  },
-  {
-    id: "business",
-    label: "Business Center",
-    icon: "♧",
-  },
-  {
-    id: "referral",
-    label: "Referral Center",
-    icon: "↗",
-  },
-   {
-    id: "level-income",
-    label: "Level Income",
-    icon: "◉",
-  },
-  {
-    id: "rank",
-    label: "Rank Center",
-    icon: "★",
-  },
-  {
-    id: "royalty",
-    label: "Royalty Center",
-    icon: "♛",
-  },
-  {
-    id: "withdrawal",
-    label: "Withdrawal",
-    icon: "⇧",
-  },
-  {
-    id: "emergency",
-    label: "Emergency Capital Withdrawal",
-    icon: "⚠",
-  },
-];
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="statCard">
+      <div className="statLabel">
+        {label}
+      </div>
 
-const HISTORY_NAV: {
-  id: Section;
-  label: string;
-}[] = [
-  {
-    id: "history-staking",
-    label: "Staking History",
-  },
-  {
-    id: "history-withdrawal",
-    label: "Withdrawal History",
-  },
-  {
-    id: "history-rank",
-    label: "Rank Reward History",
-  },
-  {
-    id: "history-royalty",
-    label: "Royalty History",
-  },
-];
+      <div className="statValue">
+        {value}
+      </div>
+
+      {sub && (
+        <div className="statSub">
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionTitle({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="sectionTitle">
+      <span className="eyebrow">
+        {eyebrow}
+      </span>
+
+      <h2>{title}</h2>
+
+      {description && (
+        <p>{description}</p>
+      )}
+    </div>
+  );
+}
+
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="emptyState">
+      <div className="emptyIcon">
+        ○
+      </div>
+
+      <h3>{title}</h3>
+
+      <p>{description}</p>
+    </div>
+  );
+}
 
 /* =========================================================
-   MAIN COMPONENT
+   LOGIN
+========================================================= */
+
+function LoginScreen({
+  onConnect,
+  busy,
+  error,
+}: {
+  onConnect: () => void;
+  busy: boolean;
+  error: string;
+}) {
+  return (
+    <main className="loginPage">
+      <div className="loginCard">
+        <div className="logoBox">
+          <img
+            src="/orbi-logo.png"
+            alt="ORBI"
+          />
+        </div>
+
+        <span className="eyebrow">
+          ORBIWORLD
+        </span>
+
+        <h1>
+          Web3 Dashboard
+        </h1>
+
+        <p>
+          Connect your wallet to
+          access your ORBI account,
+          staking, earnings, business
+          and referral data.
+        </p>
+
+        {error && (
+          <div className="errorBox">
+            {error}
+          </div>
+        )}
+
+        <button
+          className="primaryButton"
+          onClick={onConnect}
+          disabled={busy}
+        >
+          {busy
+            ? "Connecting..."
+            : "Connect Wallet"}
+        </button>
+
+        <div className="networkText">
+          BSC Testnet
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* =========================================================
+   REGISTRATION
+========================================================= */
+
+function RegistrationScreen({
+  account,
+  onRegister,
+  busy,
+  error,
+}: {
+  account: string;
+  onRegister: (
+    sponsor: string
+  ) => void;
+  busy: boolean;
+  error: string;
+}) {
+  const [sponsor, setSponsor] =
+    useState("");
+
+  return (
+    <main className="loginPage">
+      <div className="loginCard">
+        <div className="logoBox">
+          <img
+            src="/orbi-logo.png"
+            alt="ORBI"
+          />
+        </div>
+
+        <span className="eyebrow">
+          ACCOUNT SETUP
+        </span>
+
+        <h1>
+          Register your wallet
+        </h1>
+
+        <p>
+          This wallet is not
+          registered in the ORBI
+          contract.
+        </p>
+
+        <div className="walletPreview">
+          {shortAddress(account)}
+        </div>
+
+        <label className="fieldLabel">
+          Sponsor wallet
+        </label>
+
+        <input
+          className="input"
+          value={sponsor}
+          onChange={(e) =>
+            setSponsor(e.target.value)
+          }
+          placeholder="0x..."
+        />
+
+        <div className="fieldHint">
+          Leave empty only if the
+          contract permits zero sponsor.
+        </div>
+
+        {error && (
+          <div className="errorBox">
+            {error}
+          </div>
+        )}
+
+        <button
+          className="primaryButton"
+          disabled={busy}
+          onClick={() =>
+            onRegister(
+              sponsor.trim() ||
+                ethers.constants.AddressZero
+            )
+          }
+        >
+          {busy
+            ? "Registering..."
+            : "Register Wallet"}
+        </button>
+      </div>
+    </main>
+  );
+}
+
+/* =========================================================
+   PACKAGE CARD
+========================================================= */
+
+function PackageCard({
+  pkg,
+}: {
+  pkg: PackageData;
+}) {
+  const roiPercent = pkg.amount.gt(0)
+    ? pkg.roiPaid
+        .mul(100)
+        .div(pkg.amount)
+        .toNumber()
+    : 0;
+
+  return (
+    <div className="packageCard">
+      <div className="packageTop">
+        <div>
+          <span className="packageLabel">
+            PACKAGE
+          </span>
+
+          <h3>
+            #{pkg.packageId}
+          </h3>
+        </div>
+
+        <span
+          className={`statusBadge ${
+            pkg.active
+              ? "active"
+              : "closed"
+          }`}
+        >
+          {pkg.active
+            ? "ACTIVE"
+            : "CLOSED"}
+        </span>
+      </div>
+
+      <div className="packageAmount">
+        $
+        {formatUSDT(pkg.amount)}
+      </div>
+
+      <div className="packageGrid">
+        <div>
+          <span>Max Payout</span>
+          <strong>
+            $
+            {formatUSDT(
+              pkg.maxPayout
+            )}
+          </strong>
+        </div>
+
+        <div>
+          <span>ROI Paid</span>
+          <strong>
+            $
+            {formatUSDT(
+              pkg.roiPaid
+            )}
+          </strong>
+        </div>
+
+        <div>
+          <span>Level Paid</span>
+          <strong>
+            $
+            {formatUSDT(
+              pkg.levelPaid
+            )}
+          </strong>
+        </div>
+
+        <div>
+          <span>Total Paid</span>
+          <strong>
+            $
+            {formatUSDT(
+              pkg.totalPaid
+            )}
+          </strong>
+        </div>
+      </div>
+
+      <div className="progressBlock">
+        <div className="progressHeader">
+          <span>
+            Payout progress
+          </span>
+
+          <span>
+            {roiPercent}%
+          </span>
+        </div>
+
+        <div className="progressTrack">
+          <div
+            className="progressFill"
+            style={{
+              width: `${Math.min(
+                roiPercent,
+                100
+              )}%`,
+            }}
+          />
+        </div>
+      </div>
+
+      <div className="packageFooter">
+        <span>
+          Started{" "}
+          {formatDate(
+            pkg.startTime
+          )}
+        </span>
+
+        <span>
+          {pkg.active
+            ? "On-chain active"
+            : pkg.closedTime
+            ? `Closed ${formatDate(
+                pkg.closedTime
+              )}`
+            : "Closed"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   MAIN PAGE
 ========================================================= */
 
 export default function DashboardPage() {
-  const [account, setAccount] = useState("");
+  const [account, setAccount] =
+    useState("");
 
   const [provider, setProvider] =
-    useState<ethers.providers.Web3Provider | null>(null);
-
-  const [signer, setSigner] =
-    useState<ethers.Signer | null>(null);
+    useState<ethers.providers.Web3Provider | null>(
+      null
+    );
 
   const [contract, setContract] =
-    useState<ethers.Contract | null>(null);
+    useState<ethers.Contract | null>(
+      null
+    );
 
-  const [token, setToken] =
-    useState<ethers.Contract | null>(null);
+  const [usdt, setUsdt] =
+    useState<ethers.Contract | null>(
+      null
+    );
 
   const [profile, setProfile] =
-    useState<Profile | null>(null);
+    useState<UserData | null>(null);
 
-  const [config, setConfig] = useState<Config>({
-    minStake: parseUSDT("50"),
-    minTopup: parseUSDT("50"),
-    minWithdrawal: parseUSDT("20"),
+  const [packages, setPackages] =
+    useState<PackageData[]>([]);
 
-    feeBps: 1000,
-    roiBps: 50,
-
-    registrationEnabled: true,
-    stakingEnabled: true,
-    withdrawalEnabled: true,
-    capitalWithdrawalEnabled: true,
-
-    levelEnabled: true,
-    rankEnabled: true,
-    royaltyEnabled: true,
-  });
-
-  const [usdtBalance, setUsdtBalance] =
-    useState<ethers.BigNumber>(ZERO);
+  const [directUsers, setDirectUsers] =
+    useState<DirectUser[]>([]);
 
   const [section, setSection] =
     useState<Section>("overview");
 
-  const [packages, setPackages] =
-    useState<PackageRow[]>([]);
+  const [loading, setLoading] =
+    useState(false);
 
-  const [withdrawals, setWithdrawals] =
-    useState<WithdrawalRow[]>([]);
+  const [txBusy, setTxBusy] =
+    useState(false);
 
-  const [rankHistory, setRankHistory] =
-    useState<RankRow[]>([]);
+  const [error, setError] =
+    useState("");
 
-  const [royaltyHistory, setRoyaltyHistory] =
-    useState<RoyaltyRow[]>([]);
-
-  const [team, setTeam] =
-    useState<TeamRow[]>([]);
+  const [info, setInfo] =
+    useState("");
 
   const [stakeAmount, setStakeAmount] =
     useState("");
@@ -448,849 +876,12 @@ export default function DashboardPage() {
     useState("");
 
   const [withdrawWallet, setWithdrawWallet] =
-    useState<WalletType>(WalletType.EARNING);
-
-  const [busy, setBusy] =
-    useState(false);
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [connecting, setConnecting] =
-    useState(false);
-
-  const [message, setMessage] =
-    useState("");
-
-  const [error, setError] =
-    useState("");
-
-  const [historyOpen, setHistoryOpen] =
-    useState(true);
+    useState<WalletType>(
+      WalletType.EARNING
+    );
 
   const [mobileOpen, setMobileOpen] =
     useState(false);
-
-  /* =======================================================
-     REFERRAL LINK
-  ======================================================= */
-
-  const referralLink = useMemo(() => {
-    if (!account || typeof window === "undefined") {
-      return "";
-    }
-
-    return `${window.location.origin}/dashboard?ref=${account}`;
-  }, [account]);
-
-  /* =======================================================
-     TOTAL AVAILABLE
-  ======================================================= */
-
-  const totalAvailable = useMemo(() => {
-    if (!profile) {
-      return ZERO;
-    }
-
-    return profile.earningWallet
-      .add(profile.rankWallet)
-      .add(profile.royaltyWallet);
-  }, [profile]);
-
-  /* =======================================================
-     NOTIFICATION
-  ======================================================= */
-
-  const notify = useCallback((text: string) => {
-    setMessage(text);
-
-    window.setTimeout(() => {
-      setMessage("");
-    }, 5000);
-  }, []);
-
-  /* =======================================================
-     CLEAR STATE
-  ======================================================= */
-
-  const clearState = useCallback(() => {
-    setAccount("");
-
-    setProvider(null);
-    setSigner(null);
-    setContract(null);
-    setToken(null);
-
-    setProfile(null);
-
-    setPackages([]);
-    setWithdrawals([]);
-    setRankHistory([]);
-    setRoyaltyHistory([]);
-    setTeam([]);
-
-    setUsdtBalance(ZERO);
-  }, []);
-
-  /* =======================================================
-     LOAD CONFIG
-  ======================================================= */
-
-  const loadConfig = useCallback(
-    async (c: ethers.Contract) => {
-      try {
-        const [
-          staking,
-          withdrawal,
-          roi,
-          features,
-          level,
-          rank,
-          royalty,
-        ] = await Promise.all([
-          c.s_stakingConfig(),
-          c.s_withdrawalConfig(),
-          c.s_roiConfig(),
-          c.s_featureConfig(),
-          c.s_levelConfig(),
-          c.s_rankConfig(),
-          c.s_royaltyConfig(),
-        ]);
-
-        setConfig({
-          minStake: bn(
-            staking.minimumStake ?? staking[0]
-          ),
-
-          minTopup: bn(
-            staking.minimumTopup ?? staking[1]
-          ),
-
-          minWithdrawal: bn(
-            withdrawal.minimumWithdrawal ??
-              withdrawal[0]
-          ),
-
-          feeBps: Number(
-            withdrawal.withdrawalFeeBps ??
-              withdrawal[1]
-          ),
-
-          roiBps: Number(
-            roi.dailyROIBps ?? roi[0]
-          ),
-
-          registrationEnabled: Boolean(
-            features.registrationEnabled ??
-              features[0]
-          ),
-
-          stakingEnabled: Boolean(
-            features.stakingEnabled ??
-              features[1]
-          ),
-
-          withdrawalEnabled: Boolean(
-            features.withdrawalEnabled ??
-              features[2]
-          ),
-
-          capitalWithdrawalEnabled: Boolean(
-            features.capitalWithdrawalEnabled ??
-              features[3]
-          ),
-
-          levelEnabled: Boolean(
-            level.levelIncomeEnabled ??
-              level[0]
-          ),
-
-          rankEnabled: Boolean(
-            rank.rankRewardEnabled ??
-              rank[0]
-          ),
-
-          royaltyEnabled: Boolean(
-            royalty.royaltyEnabled ??
-              royalty[0]
-          ),
-        });
-      } catch (e) {
-        console.warn(
-          "Config loading failed:",
-          e
-        );
-      }
-    },
-    []
-  );
-
-  /* =======================================================
-     LOAD PROFILE
-  ======================================================= */
-
-  const loadProfile = useCallback(
-    async (
-      c: ethers.Contract,
-      address: string
-    ) => {
-      const registered =
-        await c.isRegistered(address);
-
-      if (!registered) {
-        setProfile(null);
-        return false;
-      }
-
-      const raw =
-        await c.myProfile();
-
-      const parsed: Profile = {
-        id: bn(raw.id ?? raw[0]),
-
-        wallet:
-          raw.wallet ?? raw[1],
-
-        sponsorId:
-          bn(raw.sponsorId ?? raw[2]),
-
-        status:
-          Number(raw.status ?? raw[3] ?? 0),
-
-        directCount:
-          Number(raw.directCount ?? raw[4] ?? 0),
-
-        activeDirectCount:
-          Number(
-            raw.activeDirectCount ??
-              raw[5] ??
-              0
-          ),
-
-        lifetimeBusiness:
-          bn(
-            raw.lifetimeBusiness ??
-              raw[6]
-          ),
-
-        monthlyBusiness:
-          bn(
-            raw.monthlyBusiness ??
-              raw[7]
-          ),
-
-        todayBusiness:
-          bn(
-            raw.todayBusiness ??
-              raw[8]
-          ),
-
-        powerLegBusiness:
-          bn(
-            raw.powerLegBusiness ??
-              raw[9]
-          ),
-
-        otherLegBusiness:
-          bn(
-            raw.otherLegBusiness ??
-              raw[10]
-          ),
-
-        earningWallet:
-          bn(
-            raw.earningWallet ??
-              raw[11]
-          ),
-
-        rankWallet:
-          bn(
-            raw.rankWallet ??
-              raw[12]
-          ),
-
-        royaltyWallet:
-          bn(
-            raw.royaltyWallet ??
-              raw[13]
-          ),
-
-        totalROIIncome:
-          bn(
-            raw.totalROIIncome ??
-              raw[14]
-          ),
-
-        totalLevelIncome:
-          bn(
-            raw.totalLevelIncome ??
-              raw[15]
-          ),
-
-        totalRankIncome:
-          bn(
-            raw.totalRankIncome ??
-              raw[16]
-          ),
-
-        totalRoyaltyIncome:
-          bn(
-            raw.totalRoyaltyIncome ??
-              raw[17]
-          ),
-
-        totalWithdrawn:
-          bn(
-            raw.totalWithdrawn ??
-              raw[18]
-          ),
-
-        rank:
-          Number(
-            raw.rank ??
-              raw[19] ??
-              0
-          ),
-
-        royalty:
-          Number(
-            raw.royalty ??
-              raw[20] ??
-              0
-          ),
-      };
-
-      setProfile(parsed);
-
-      return true;
-    },
-    []
-  );
-
-/* =======================================================
-   LOAD PACKAGES — DIRECT ON-CHAIN READ
-
-   Complete history:
-   getUserPackages(userId)
-
-   Active packages:
-   getActiveUserPackages(userId)
-
-   Package details:
-   getPackage(packageId)
-
-   PackageStatus:
-   0 = ACTIVE
-   1 = CLOSED
-
-   No package event scanning.
-======================================================= */
-
-const loadPackages = useCallback(
-  async (
-    c: ethers.Contract,
-    userId: ethers.BigNumber
-  ) => {
-    try {
-      // 1. Get complete package IDs
-      const packageIdsRaw =
-        await c.getUserPackages(userId);
-
-      // 2. Get currently active package IDs
-      const activePackageIdsRaw =
-        await c.getActiveUserPackages(userId);
-
-      const packageIds = (
-        packageIdsRaw as any[]
-      ).map((id) =>
-        bn(id).toString()
-      );
-
-      const activePackageIds = new Set(
-        (activePackageIdsRaw as any[]).map(
-          (id) => bn(id).toString()
-        )
-      );
-
-      // 3. Read every package directly
-      // from on-chain package struct
-      const packageRows: PackageRow[] =
-        await Promise.all(
-          packageIds.map(
-            async (packageId) => {
-              const pkg =
-                await c.getPackage(
-                  packageId
-                );
-
-              const id =
-                bn(
-                  pkg.id ?? pkg[0]
-                ).toString();
-
-              const amount =
-                bn(
-                  pkg.amount ?? pkg[2]
-                );
-
-              const roiPaid =
-                bn(
-                  pkg.roiPaid ?? pkg[4]
-                );
-
-              const startTime =
-                Number(
-                  pkg.startTime ??
-                    pkg[7] ??
-                    0
-                );
-
-              const status =
-                Number(
-                  pkg.status ??
-                    pkg[11] ??
-                    0
-                );
-
-              const exists =
-                Boolean(
-                  pkg.exists ??
-                    pkg[14]
-                );
-
-              const isActive =
-                activePackageIds.has(
-                  id
-                );
-
-              return {
-                packageId: id,
-                amount,
-                block: 0,
-                tx: "",
-                startTime,
-                roiPaid,
-
-                // Contract enum:
-                // 0 = ACTIVE
-                // 1 = CLOSED
-                closed:
-                  !isActive ||
-                  status !== 0 ||
-                  !exists,
-              };
-            }
-          )
-        );
-
-      // Latest package first
-      packageRows.sort(
-        (a, b) =>
-          Number(b.packageId) -
-          Number(a.packageId)
-      );
-
-      setPackages(
-        packageRows
-      );
-    } catch (e: any) {
-      console.error(
-        "Direct package read failed:",
-        e
-      );
-
-      setPackages([]);
-
-      throw e;
-    }
-  },
-  []
-);
-  /* =======================================================
-     LOAD NON-PACKAGE HISTORY
-
-     Withdrawal / rank / royalty / team history still use events.
-     Package events are intentionally excluded.
-  ======================================================= */
-
-  const loadHistory = useCallback(
-    async (c: ethers.Contract, p: Profile) => {
-      try {
-        const latest = await c.provider.getBlockNumber();
-        const historyFromBlock = Math.max(0, latest - 50000);
-        const chunkSize = 2000;
-
-        const safeQuery = async (filter: any) => {
-          const results: any[] = [];
-
-          for (let from = historyFromBlock; from <= latest; from += chunkSize) {
-            const to = Math.min(from + chunkSize - 1, latest);
-
-            try {
-              const chunk = await c.queryFilter(filter, from, to);
-              results.push(...chunk);
-            } catch (queryError) {
-              console.warn(
-                `History query failed for blocks ${from}-${to}:`,
-                queryError
-              );
-            }
-          }
-
-          return results;
-        };
-
-        const [
-          requested,
-          approved,
-          rejected,
-          rankEvents,
-          royaltyEvents,
-          registered,
-        ] = await Promise.all([
-          safeQuery(
-            c.filters.WithdrawalRequested(
-              null,
-              p.id,
-              null,
-              null,
-              null,
-              null
-            )
-          ),
-          safeQuery(
-            c.filters.WithdrawalApproved(
-              null,
-              p.id,
-              null
-            )
-          ),
-          safeQuery(
-            c.filters.WithdrawRejected(
-              null,
-              p.id
-            )
-          ),
-          safeQuery(
-            c.filters.RankRewardPaid(
-              p.id,
-              null,
-              null
-            )
-          ),
-          safeQuery(
-            c.filters.RoyaltyDistributed(
-              p.id,
-              null,
-              null
-            )
-          ),
-          safeQuery(
-            c.filters.UserRegistered(
-              null,
-              null,
-              p.id
-            )
-          ),
-        ]);
-
-        const withdrawalMap = new Map<string, WithdrawalRow>();
-
-        for (const event of requested as any[]) {
-          const args = event.args;
-          const id = bn(args.requestId ?? args[0]).toString();
-
-          withdrawalMap.set(id, {
-            requestId: id,
-            walletType: Number(args.walletType ?? args[2]),
-            amount: bn(args.amount ?? args[3]),
-            fee: bn(args.fee ?? args[4]),
-            netAmount: bn(args.netAmount ?? args[5]),
-            block: event.blockNumber,
-            tx: event.transactionHash,
-            status: 'PENDING',
-          });
-        }
-
-        for (const event of approved as any[]) {
-          const id = bn(event.args.requestId ?? event.args[0]).toString();
-          const row = withdrawalMap.get(id);
-          if (row) row.status = 'APPROVED';
-        }
-
-        for (const event of rejected as any[]) {
-          const id = bn(event.args.requestId ?? event.args[0]).toString();
-          const row = withdrawalMap.get(id);
-          if (row) row.status = 'REJECTED';
-        }
-
-        setWithdrawals(
-          Array.from(withdrawalMap.values()).sort(
-            (a, b) => b.block - a.block
-          )
-        );
-
-        setRankHistory(
-          (rankEvents as any[])
-            .map((event) => ({
-              rank: Number(event.args.rank ?? event.args[1]),
-              reward: bn(event.args.reward ?? event.args[2]),
-              block: event.blockNumber,
-              tx: event.transactionHash,
-            }))
-            .reverse()
-        );
-
-        setRoyaltyHistory(
-          (royaltyEvents as any[])
-            .map((event) => ({
-              level: Number(
-                event.args.royaltyLevel ?? event.args[1]
-              ),
-              amount: bn(event.args.amount ?? event.args[2]),
-              block: event.blockNumber,
-              tx: event.transactionHash,
-            }))
-            .reverse()
-        );
-
-        const teamRows: TeamRow[] = [];
-
-        for (const event of registered as any[]) {
-          const args = event.args;
-          const id = bn(args.userId ?? args[0]);
-          const wallet = String(args.wallet ?? args[1]);
-
-          try {
-            const rawUser = await c.getUser(id);
-
-            teamRows.push({
-              id: id.toString(),
-              wallet,
-              sponsorId: bn(rawUser.sponsorId ?? rawUser[2]).toString(),
-              status: Number(rawUser.status ?? rawUser[3] ?? 0),
-              directCount: Number(
-                rawUser.directCount ?? rawUser[4] ?? 0
-              ),
-              activeDirectCount: Number(
-                rawUser.activeDirectCount ?? rawUser[5] ?? 0
-              ),
-            });
-          } catch {
-            // Ignore an individual team read failure.
-          }
-        }
-
-        setTeam(teamRows.reverse());
-      } catch (e) {
-        console.warn('History loading failed:', e);
-      }
-    },
-    []
-  );
-
-  /* =======================================================
-     REFRESH DASHBOARD
-  ======================================================= */
-
-  const refresh =
-    useCallback(async () => {
-      if (!contract || !account) {
-        return;
-      }
-
-      setLoading(true);
-      setError("");
-
-      try {
-        await loadConfig(
-          contract
-        );
-
-        const registered =
-          await loadProfile(
-            contract,
-            account
-          );
-
-        const balance =
-          token
-            ? await token.balanceOf(
-                account
-              )
-            : ZERO;
-
-        setUsdtBalance(
-          bn(balance)
-        );
-
-        if (!registered) {
-          setPackages([]);
-          setWithdrawals([]);
-          setRankHistory([]);
-          setRoyaltyHistory([]);
-          setTeam([]);
-
-          return;
-        }
-
-        const raw =
-          await contract.myProfile();
-
-        const currentProfile: Profile =
-          {
-            id: bn(
-              raw.id ??
-                raw[0]
-            ),
-
-            wallet:
-              raw.wallet ??
-              raw[1],
-
-            sponsorId:
-              bn(
-                raw.sponsorId ??
-                  raw[2]
-              ),
-
-            status:
-              Number(
-                raw.status ??
-                  raw[3] ??
-                  0
-              ),
-
-            directCount:
-              Number(
-                raw.directCount ??
-                  raw[4] ??
-                  0
-              ),
-
-            activeDirectCount:
-              Number(
-                raw.activeDirectCount ??
-                  raw[5] ??
-                  0
-              ),
-
-            lifetimeBusiness:
-              bn(
-                raw.lifetimeBusiness ??
-                  raw[6]
-              ),
-
-            monthlyBusiness:
-              bn(
-                raw.monthlyBusiness ??
-                  raw[7]
-              ),
-
-            todayBusiness:
-              bn(
-                raw.todayBusiness ??
-                  raw[8]
-              ),
-
-            powerLegBusiness:
-              bn(
-                raw.powerLegBusiness ??
-                  raw[9]
-              ),
-
-            otherLegBusiness:
-              bn(
-                raw.otherLegBusiness ??
-                  raw[10]
-              ),
-
-            earningWallet:
-              bn(
-                raw.earningWallet ??
-                  raw[11]
-              ),
-
-            rankWallet:
-              bn(
-                raw.rankWallet ??
-                  raw[12]
-              ),
-
-            royaltyWallet:
-              bn(
-                raw.royaltyWallet ??
-                  raw[13]
-              ),
-
-            totalROIIncome:
-              bn(
-                raw.totalROIIncome ??
-                  raw[14]
-              ),
-
-            totalLevelIncome:
-              bn(
-                raw.totalLevelIncome ??
-                  raw[15]
-              ),
-
-            totalRankIncome:
-              bn(
-                raw.totalRankIncome ??
-                  raw[16]
-              ),
-
-            totalRoyaltyIncome:
-              bn(
-                raw.totalRoyaltyIncome ??
-                  raw[17]
-              ),
-
-            totalWithdrawn:
-              bn(
-                raw.totalWithdrawn ??
-                  raw[18]
-              ),
-
-            rank:
-              Number(
-                raw.rank ??
-                  raw[19] ??
-                  0
-              ),
-
-            royalty:
-              Number(
-                raw.royalty ??
-                  raw[20] ??
-                  0
-              ),
-          };
-
-        await Promise.all([
-          loadPackages(contract, currentProfile.id),
-          loadHistory(contract, currentProfile),
-        ]);
-      } catch (e: any) {
-        setError(
-          errorText(
-            e,
-            "Dashboard refresh failed."
-          )
-        );
-      } finally {
-        setLoading(false);
-      }
-    }, [
-      contract,
-      account,
-      token,
-      loadConfig,
-      loadProfile,
-      loadPackages,
-      loadHistory,
-    ]);
 
   /* =======================================================
      CONNECT WALLET
@@ -1298,209 +889,357 @@ const loadPackages = useCallback(
 
   const connectWallet =
     useCallback(async () => {
-      if (!window.ethereum) {
-        setError(
-          "Please install MetaMask."
-        );
-
-        return;
-      }
-
-      setConnecting(true);
-      setError("");
-
       try {
+        setError("");
+        setInfo("");
+        setLoading(true);
+
+        if (!window.ethereum) {
+          throw new Error(
+            "MetaMask is not installed."
+          );
+        }
+
         await ensureBscTestnet();
 
-        await window.ethereum.request({
-          method:
-            "eth_requestAccounts",
-        });
-
-        const web3Provider =
+        const web3 =
           new ethers.providers.Web3Provider(
             window.ethereum,
             "any"
           );
 
-        const web3Signer =
-          web3Provider.getSigner();
+        await web3.send(
+          "eth_requestAccounts",
+          []
+        );
+
+        const signer =
+          web3.getSigner();
 
         const address =
-          await web3Signer.getAddress();
+          await signer.getAddress();
 
-        const orbiContract =
-          getContract(
-            web3Signer
-          );
+        const network =
+          await web3.getNetwork();
 
-        const usdtContract =
-          getUSDTContract(
-            web3Provider
-          );
-
-        setProvider(
-          web3Provider
-        );
-
-        setSigner(
-          web3Signer
-        );
-
-        setContract(
-          orbiContract
-        );
-
-        setToken(
-          usdtContract
-        );
-
-        setAccount(
-          address
-        );
-
-        await loadConfig(
-          orbiContract
-        );
-
-        /*
-         * Check registration.
-         */
-        let registered =
-          await orbiContract.isRegistered(
-            address
-          );
-
-        /*
-         * =================================================
-         * ROOT / OWNER AUTO REGISTRATION
-         *
-         * Contract constructor grants DEFAULT_ADMIN_ROLE
-         * to deployer but does NOT create a User.
-         *
-         * First admin wallet is therefore registered here
-         * as root with sponsor = zero address.
-         * =================================================
-         */
-
-        if (!registered) {
-          const accessControl =
-            new ethers.Contract(
-              CONTRACT_ADDRESS,
-              ACCESS_CONTROL_ABI,
-              web3Provider
-            );
-
-          const isAdmin =
-            await accessControl.hasRole(
-              DEFAULT_ADMIN_ROLE,
-              address
-            );
-
-          const stats =
-            await orbiContract.s_systemStats();
-
-          const totalUsers =
-            bn(
-              stats.totalUsers ??
-                stats[0]
-            );
-
-          const params =
-            new URLSearchParams(
-              window.location.search
-            );
-
-          const referral =
-            params.get("ref");
-
-          /*
-           * OWNER / ROOT
-           */
-          if (
-            isAdmin &&
-            totalUsers.isZero()
-          ) {
-            notify(
-              "Initializing ORBI root account..."
-            );
-
-            const tx =
-              await orbiContract
-                .connect(
-                  web3Signer
-                )
-                .registerOnly(
-                  ethers.constants
-                    .AddressZero
-                );
-
-            await tx.wait();
-
-            registered = true;
-
-            notify(
-              "Root account registered successfully."
-            );
-          }
-
-          /*
-           * NORMAL USER WITH REFERRAL LINK
-           */
-          else if (
-            referral &&
-            ethers.utils.isAddress(
-              referral
-            )
-          ) {
-            notify(
-              "Referral detected. Confirm registration in MetaMask..."
-            );
-
-            const tx =
-              await orbiContract
-                .connect(
-                  web3Signer
-                )
-                .registerOnly(
-                  referral
-                );
-
-            await tx.wait();
-
-            registered = true;
-
-            notify(
-              "Registration successful. Welcome to ORBIWORLD."
-            );
-          }
-        }
-
-        /*
-         * If no referral exists, DO NOT show
-         * old Account Registration form.
-         */
-        if (!registered) {
-          notify(
-            "Wallet connected. Open a valid ORBI referral link to register."
+        if (
+          network.chainId !==
+          BSC_TESTNET.chainId
+        ) {
+          throw new Error(
+            "Please switch to BSC Testnet."
           );
         }
-      } catch (e: any) {
-        console.error(e);
 
+        const orbi =
+          getContract(signer);
+
+        const token =
+          getUSDTContract(signer);
+
+        setProvider(web3);
+        setAccount(address);
+        setContract(orbi);
+        setUsdt(token);
+      } catch (err: any) {
         setError(
-          errorText(
-            e,
+          err?.message ||
             "Wallet connection failed."
-          )
         );
       } finally {
-        setConnecting(false);
+        setLoading(false);
       }
-    }, [
-      loadConfig,
-      notify,
-    ]);
+    }, []);
+
+  /* =======================================================
+     LOAD PROFILE
+  ======================================================= */
+
+  const loadProfile =
+    useCallback(
+      async (
+        c: ethers.Contract,
+        wallet: string
+      ) => {
+        const registered =
+          await c.isRegistered(
+            wallet
+          );
+
+        if (!registered) {
+          setProfile(null);
+          setPackages([]);
+          setDirectUsers([]);
+          return false;
+        }
+
+        const raw =
+          await c.myProfile();
+
+        const parsed =
+          userFromTuple(raw);
+
+        setProfile(parsed);
+
+        return true;
+      },
+      []
+    );
+
+  /* =======================================================
+     LOAD PACKAGES
+     
+     NO EVENT SCANNING.
+     NO queryFilter.
+     NO PackageActivated.
+     NO PackageTopup.
+     NO PackageClosed.
+
+     SOURCE:
+       getUserPackages()
+       getActiveUserPackages()
+       getPackage()
+  ======================================================= */
+
+  const loadPackages =
+    useCallback(
+      async (
+        c: ethers.Contract,
+        userId: ethers.BigNumber
+      ) => {
+        const allRaw =
+          await c.getUserPackages(
+            userId
+          );
+
+        const activeRaw =
+          await c.getActiveUserPackages(
+            userId
+          );
+
+        const allIds: string[] =
+  (allRaw || []).map(
+    (id: any): string =>
+      bn(id).toString()
+  );
+
+const activeIds: string[] =
+  (activeRaw || []).map(
+    (id: any): string =>
+      bn(id).toString()
+  );
+
+const activeSet: Set<string> =
+  new Set<string>(activeIds);
+
+        const rows: PackageData[] = [];
+
+        for (const id of allIds) {
+          try {
+            const raw =
+              await c.getPackage(id);
+
+            const pkg =
+              packageFromTuple(
+                raw,
+                activeSet
+              );
+
+            if (pkg.exists) {
+              rows.push(pkg);
+            }
+          } catch (packageError) {
+            console.warn(
+              `Unable to read package ${id}`,
+              packageError
+            );
+          }
+        }
+
+        rows.sort(
+          (a, b) =>
+            Number(b.packageId) -
+            Number(a.packageId)
+        );
+
+        setPackages(rows);
+      },
+      []
+    );
+
+  /* =======================================================
+     LOAD DIRECT USERS
+  ======================================================= */
+
+  const loadDirectUsers =
+    useCallback(
+      async (
+        c: ethers.Contract,
+        userId: ethers.BigNumber
+      ) => {
+        try {
+          const raw =
+            await c.getDirectUsers(
+              userId
+            );
+
+          const users =
+            (raw || []).map(
+              (item: any) =>
+                directUserFromTuple(
+                  item
+                )
+            );
+
+          setDirectUsers(users);
+        } catch (err) {
+          console.warn(
+            "Direct users read failed:",
+            err
+          );
+
+          setDirectUsers([]);
+        }
+      },
+      []
+    );
+
+  /* =======================================================
+     LOAD ALL ON-CHAIN DATA
+  ======================================================= */
+
+  const loadDashboard =
+    useCallback(
+      async (
+        c: ethers.Contract,
+        wallet: string
+      ) => {
+        try {
+          setError("");
+
+          const registered =
+            await c.isRegistered(
+              wallet
+            );
+
+          if (!registered) {
+            setProfile(null);
+            setPackages([]);
+            setDirectUsers([]);
+            return;
+          }
+
+          const rawProfile =
+            await c.myProfile();
+
+          const parsed =
+            userFromTuple(
+              rawProfile
+            );
+
+          setProfile(parsed);
+
+          /*
+           * Direct package storage reads.
+           */
+          await loadPackages(
+            c,
+            parsed.id
+          );
+
+          /*
+           * Direct team read.
+           */
+          await loadDirectUsers(
+            c,
+            parsed.id
+          );
+        } catch (err: any) {
+          console.error(
+            "Dashboard load failed:",
+            err
+          );
+
+          setError(
+            err?.reason ||
+              err?.data?.message ||
+              err?.message ||
+              "Unable to read dashboard data from the contract."
+          );
+        }
+      },
+      [
+        loadPackages,
+        loadDirectUsers,
+      ]
+    );
+
+  /* =======================================================
+     INITIAL WALLET CHECK
+  ======================================================= */
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      if (
+        !window.ethereum
+      ) {
+        return;
+      }
+
+      try {
+        const web3 =
+          new ethers.providers.Web3Provider(
+            window.ethereum,
+            "any"
+          );
+
+        const accounts =
+          await web3.listAccounts();
+
+        if (
+          !mounted ||
+          accounts.length === 0
+        ) {
+          return;
+        }
+
+        const network =
+          await web3.getNetwork();
+
+        if (
+          network.chainId !==
+          BSC_TESTNET.chainId
+        ) {
+          return;
+        }
+
+        const signer =
+          web3.getSigner();
+
+        const address =
+          accounts[0];
+
+        setProvider(web3);
+        setAccount(address);
+        setContract(
+          getContract(signer)
+        );
+        setUsdt(
+          getUSDTContract(signer)
+        );
+      } catch {
+        // Wallet can remain disconnected.
+      }
+    }
+
+    init();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   /* =======================================================
      WALLET EVENTS
@@ -1511,417 +1250,599 @@ const loadPackages = useCallback(
       return;
     }
 
-    const onAccountsChanged =
-      (
-        accounts: string[]
-      ) => {
+    const handleAccounts =
+      (accounts: string[]) => {
         if (
-          !accounts.length
+          !accounts ||
+          accounts.length === 0
         ) {
-          clearState();
-        } else {
-          connectWallet().catch(
-            () => {}
-          );
+          setAccount("");
+          setProfile(null);
+          setPackages([]);
+          setDirectUsers([]);
+          return;
         }
+
+        const next =
+          accounts[0];
+
+        setAccount(next);
       };
 
-    const onChainChanged =
-      () => {
-        window.location.reload();
-      };
+    const handleChain = () => {
+      window.location.reload();
+    };
 
-    window.ethereum.on?.(
+    window.ethereum.on(
       "accountsChanged",
-      onAccountsChanged
+      handleAccounts
     );
 
-    window.ethereum.on?.(
+    window.ethereum.on(
       "chainChanged",
-      onChainChanged
+      handleChain
     );
 
     return () => {
-      window.ethereum.removeListener?.(
+      window.ethereum.removeListener(
         "accountsChanged",
-        onAccountsChanged
+        handleAccounts
       );
 
-      window.ethereum.removeListener?.(
+      window.ethereum.removeListener(
         "chainChanged",
-        onChainChanged
+        handleChain
       );
     };
-  }, [
-    connectWallet,
-    clearState,
-  ]);
+  }, []);
 
   /* =======================================================
-     REFRESH AFTER CONNECT
+     REFRESH WHEN CONTRACT IS READY
   ======================================================= */
 
   useEffect(() => {
-    if (
-      account &&
-      contract
-    ) {
-      refresh();
+  if (!contract || !account) {
+    return;
+  }
+
+  const currentContract: ethers.Contract =
+    contract;
+
+  const currentAccount: string =
+    account;
+
+  let cancelled = false;
+
+  async function run() {
+    setLoading(true);
+
+    try {
+      if (!cancelled) {
+        await loadDashboard(
+          currentContract,
+          currentAccount
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setLoading(false);
+      }
     }
-  }, [
-    account,
-    contract,
-    refresh,
-  ]);
+  }
+
+  run();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  contract,
+  account,
+  loadDashboard,
+]);
 
   /* =======================================================
-     DISCONNECT
+     REGISTER
   ======================================================= */
 
-  function disconnectWallet() {
-    clearState();
-    setSection("overview");
-  }
+  const register =
+    useCallback(
+      async (
+        sponsorWallet: string
+      ) => {
+        if (!contract) {
+          return;
+        }
+
+        try {
+          setTxBusy(true);
+          setError("");
+          setInfo("");
+
+          if (
+            !ethers.utils.isAddress(
+              sponsorWallet
+            )
+          ) {
+            throw new Error(
+              "Invalid sponsor wallet address."
+            );
+          }
+
+          const tx =
+            await contract.registerOnly(
+              sponsorWallet
+            );
+
+          setInfo(
+            "Registration transaction submitted. Waiting for confirmation..."
+          );
+
+          await tx.wait();
+
+          setInfo(
+            "Registration successful."
+          );
+
+          await loadDashboard(
+            contract,
+            account
+          );
+        } catch (err: any) {
+          setError(
+            err?.reason ||
+              err?.data?.message ||
+              err?.message ||
+              "Registration failed."
+          );
+        } finally {
+          setTxBusy(false);
+        }
+      },
+      [
+        contract,
+        account,
+        loadDashboard,
+      ]
+    );
 
   /* =======================================================
      APPROVE USDT
   ======================================================= */
 
-  async function approveIfNeeded(
-    amount: ethers.BigNumber
-  ) {
-    if (
-      !token ||
-      !signer ||
-      !account
-    ) {
-      throw new Error(
-        "Wallet not connected."
-      );
-    }
+  const approveUSDT =
+    useCallback(
+      async (
+        amount: ethers.BigNumber
+      ) => {
+        if (!usdt) {
+          throw new Error(
+            "USDT contract is not connected."
+          );
+        }
 
-    const allowance =
-      bn(
-        await token.allowance(
-          account,
-          CONTRACT_ADDRESS
-        )
-      );
+        const allowance =
+          await usdt.allowance(
+            account,
+            CONTRACT_ADDRESS
+          );
 
-    if (
-      allowance.gte(amount)
-    ) {
-      return;
-    }
+        if (
+          allowance.gte(amount)
+        ) {
+          return;
+        }
 
-    const tx =
-      await token
-        .connect(signer)
-        .approve(
-          CONTRACT_ADDRESS,
-          amount
+        setInfo(
+          "Approving USDT..."
         );
 
-    notify(
-      "USDT approval submitted..."
-    );
-
-    await tx.wait();
-  }
-
-  /* =======================================================
-     ACTIVATE PACKAGE
-  ======================================================= */
-
-  async function activatePackage() {
-    if (
-      !contract ||
-      !token ||
-      !signer
-    ) {
-      return;
-    }
-
-    try {
-      const amount =
-        units(
-          stakeAmount
-        );
-
-      if (
-        amount.lt(
-          config.minStake
-        )
-      ) {
-        throw new Error(
-          `Minimum stake is ${money(
-            config.minStake
-          )} USDT.`
-        );
-      }
-
-      setBusy(true);
-
-      await approveIfNeeded(
-        amount
-      );
-
-      const tx =
-        await contract
-          .connect(signer)
-          .activateAccount(
+        const tx =
+          await usdt.approve(
+            CONTRACT_ADDRESS,
             amount
           );
 
-      notify(
-        "Package activation submitted..."
-      );
+        await tx.wait();
 
-      await tx.wait();
+        setInfo(
+          "USDT approval confirmed."
+        );
+      },
+      [
+        usdt,
+        account,
+      ]
+    );
 
-      setStakeAmount("");
+  /* =======================================================
+     FIRST STAKE
+  ======================================================= */
 
-      notify(
-        "Package activated successfully."
-      );
+  const activate =
+    useCallback(async () => {
+      if (
+        !contract ||
+        !usdt
+      ) {
+        return;
+      }
 
-      await refresh();
-    } catch (e: any) {
-      setError(
-        errorText(
-          e,
-          "Activation failed."
-        )
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+      try {
+        setTxBusy(true);
+        setError("");
+        setInfo("");
+
+        if (!stakeAmount) {
+          throw new Error(
+            "Enter stake amount."
+          );
+        }
+
+        const amount =
+          parseUSDT(
+            stakeAmount
+          );
+
+        await approveUSDT(
+          amount
+        );
+
+        setInfo(
+          "Activating account..."
+        );
+
+        const tx =
+          await contract.activateAccount(
+            amount
+          );
+
+        await tx.wait();
+
+        setInfo(
+          "Package activated successfully."
+        );
+
+        setStakeAmount("");
+
+        await loadDashboard(
+          contract,
+          account
+        );
+      } catch (err: any) {
+        setError(
+          err?.reason ||
+            err?.data?.message ||
+            err?.message ||
+            "Activation failed."
+        );
+      } finally {
+        setTxBusy(false);
+      }
+    }, [
+      contract,
+      usdt,
+      stakeAmount,
+      approveUSDT,
+      account,
+      loadDashboard,
+    ]);
 
   /* =======================================================
      TOP UP
   ======================================================= */
 
-  async function topUpPackage() {
-    if (
-      !contract ||
-      !token ||
-      !signer
-    ) {
-      return;
-    }
-
-    try {
-      const amount =
-        units(
-          stakeAmount
-        );
-
+  const topUp =
+    useCallback(async () => {
       if (
-        amount.lt(
-          config.minTopup
-        )
+        !contract ||
+        !usdt
       ) {
-        throw new Error(
-          `Minimum top-up is ${money(
-            config.minTopup
-          )} USDT.`
-        );
+        return;
       }
 
-      setBusy(true);
+      try {
+        setTxBusy(true);
+        setError("");
+        setInfo("");
 
-      await approveIfNeeded(
-        amount
-      );
+        if (!stakeAmount) {
+          throw new Error(
+            "Enter top-up amount."
+          );
+        }
 
-      const tx =
-        await contract
-          .connect(signer)
-          .topUp(
+        const amount =
+          parseUSDT(
+            stakeAmount
+          );
+
+        await approveUSDT(
+          amount
+        );
+
+        setInfo(
+          "Creating top-up package..."
+        );
+
+        const tx =
+          await contract.topUp(
             amount
           );
 
-      notify(
-        "Top-up submitted..."
-      );
+        await tx.wait();
 
-      await tx.wait();
+        setInfo(
+          "Top-up package created successfully."
+        );
 
-      setStakeAmount("");
+        setStakeAmount("");
 
-      notify(
-        "Top-up successful."
-      );
-
-      await refresh();
-    } catch (e: any) {
-      setError(
-        errorText(
-          e,
-          "Top-up failed."
-        )
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+        await loadDashboard(
+          contract,
+          account
+        );
+      } catch (err: any) {
+        setError(
+          err?.reason ||
+            err?.data?.message ||
+            err?.message ||
+            "Top-up failed."
+        );
+      } finally {
+        setTxBusy(false);
+      }
+    }, [
+      contract,
+      usdt,
+      stakeAmount,
+      approveUSDT,
+      account,
+      loadDashboard,
+    ]);
 
   /* =======================================================
-     WITHDRAWAL
+     WITHDRAW
   ======================================================= */
 
-  async function requestWithdrawal() {
-    if (
-      !contract ||
-      !signer ||
-      !profile
-    ) {
-      return;
-    }
-
-    try {
-      const amount =
-        units(
-          withdrawAmount
-        );
-
-      if (
-        amount.lt(
-          config.minWithdrawal
-        )
-      ) {
-        throw new Error(
-          `Minimum withdrawal is ${money(
-            config.minWithdrawal
-          )} USDT.`
-        );
+  const withdraw =
+    useCallback(async () => {
+      if (!contract) {
+        return;
       }
 
-      const available =
-        withdrawWallet ===
-        WalletType.EARNING
-          ? profile.earningWallet
-          : withdrawWallet ===
-            WalletType.RANK
-          ? profile.rankWallet
-          : profile.royaltyWallet;
+      try {
+        setTxBusy(true);
+        setError("");
+        setInfo("");
 
-      if (
-        amount.gt(
-          available
-        )
-      ) {
-        throw new Error(
-          "Insufficient selected wallet balance."
+        if (!withdrawAmount) {
+          throw new Error(
+            "Enter withdrawal amount."
+          );
+        }
+
+        const amount =
+          parseUSDT(
+            withdrawAmount
+          );
+
+        setInfo(
+          "Submitting withdrawal request..."
         );
-      }
 
-      setBusy(true);
-
-      const tx =
-        await contract
-          .connect(signer)
-          .requestWithdraw(
+        const tx =
+          await contract.requestWithdraw(
             withdrawWallet,
             amount
           );
 
-      notify(
-        "Withdrawal request submitted..."
-      );
+        await tx.wait();
 
-      await tx.wait();
+        setInfo(
+          "Withdrawal request submitted successfully."
+        );
 
-      setWithdrawAmount("");
+        setWithdrawAmount("");
 
-      notify(
-        "Withdrawal request created successfully."
-      );
-
-      await refresh();
-    } catch (e: any) {
-      setError(
-        errorText(
-          e,
-          "Withdrawal request failed."
-        )
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+        await loadDashboard(
+          contract,
+          account
+        );
+      } catch (err: any) {
+        setError(
+          err?.reason ||
+            err?.data?.message ||
+            err?.message ||
+            "Withdrawal failed."
+        );
+      } finally {
+        setTxBusy(false);
+      }
+    }, [
+      contract,
+      withdrawAmount,
+      withdrawWallet,
+      account,
+      loadDashboard,
+    ]);
 
   /* =======================================================
-     EMERGENCY CAPITAL WITHDRAWAL
+     DERIVED DATA
   ======================================================= */
 
-  async function emergencyCapitalWithdraw() {
-    if (
-      !contract ||
-      !signer
-    ) {
-      return;
-    }
+  const activePackages =
+    useMemo(
+      () =>
+        packages.filter(
+          (pkg) =>
+            pkg.active &&
+            pkg.status ===
+              PackageStatus.ACTIVE
+        ),
+      [packages]
+    );
 
-    const confirmed =
-      window.confirm(
-        "Emergency Capital Withdrawal permanently closes your active packages and puts your account into Emergency Exit. Continue?"
-      );
+  const closedPackages =
+    useMemo(
+      () =>
+        packages.filter(
+          (pkg) =>
+            !pkg.active ||
+            pkg.status !==
+              PackageStatus.ACTIVE
+        ),
+      [packages]
+    );
 
-    if (!confirmed) {
-      return;
-    }
+  const totalStaked =
+    useMemo(
+      () =>
+        packages.reduce(
+          (sum, pkg) =>
+            sum.add(pkg.amount),
+          ZERO
+        ),
+      [packages]
+    );
 
-    try {
-      setBusy(true);
+  const activeCapital =
+    useMemo(
+      () =>
+        activePackages.reduce(
+          (sum, pkg) =>
+            sum.add(pkg.amount),
+          ZERO
+        ),
+      [activePackages]
+    );
 
-      const tx =
-        await contract
-          .connect(signer)
-          .emergencyCapitalWithdraw();
+  const totalPackageROI =
+    useMemo(
+      () =>
+        packages.reduce(
+          (sum, pkg) =>
+            sum.add(pkg.roiPaid),
+          ZERO
+        ),
+      [packages]
+    );
 
-      notify(
-        "Emergency withdrawal submitted..."
-      );
-
-      await tx.wait();
-
-      notify(
-        "Emergency Capital Withdrawal completed."
-      );
-
-      await refresh();
-    } catch (e: any) {
-      setError(
-        errorText(
-          e,
-          "Emergency Capital Withdrawal failed."
-        )
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  const activePackage =
+    activePackages[0] ||
+    null;
 
   /* =======================================================
-     LOGIN
+     NAVIGATION
+  ======================================================= */
+
+  const navigation: {
+    id: Section;
+    label: string;
+    icon: string;
+  }[] = [
+    {
+      id: "overview",
+      label: "Overview",
+      icon: "⌂",
+    },
+    {
+      id: "packages",
+      label: "My Packages",
+      icon: "◈",
+    },
+    {
+      id: "business",
+      label: "Business",
+      icon: "◎",
+    },
+    {
+      id: "earnings",
+      label: "Earnings",
+      icon: "$",
+    },
+    {
+      id: "referral",
+      label: "Referral",
+      icon: "↗",
+    },
+    {
+      id: "withdrawal",
+      label: "Withdrawal",
+      icon: "↙",
+    },
+    {
+      id: "profile",
+      label: "Profile",
+      icon: "●",
+    },
+  ];
+
+  /* =======================================================
+     DISCONNECTED
   ======================================================= */
 
   if (!account) {
     return (
       <>
+        <style jsx global>{GLOBAL_CSS}</style>
+
         <LoginScreen
-          connect={connectWallet}
-          busy={connecting}
+          onConnect={connectWallet}
+          busy={loading}
           error={error}
         />
-
-        <style jsx global>
-          {styles}
-        </style>
       </>
     );
+  }
+
+  /* =======================================================
+     REGISTERED CHECK
+  ======================================================= */
+
+  if (
+    !profile &&
+    !loading
+  ) {
+    return (
+      <>
+        <style jsx global>{GLOBAL_CSS}</style>
+
+        <RegistrationScreen
+          account={account}
+          onRegister={register}
+          busy={txBusy}
+          error={error}
+        />
+      </>
+    );
+  }
+
+  /* =======================================================
+     LOADING
+  ======================================================= */
+
+  if (
+    loading &&
+    !profile
+  ) {
+    return (
+      <>
+        <style jsx global>{GLOBAL_CSS}</style>
+
+        <main className="loadingPage">
+          <div className="loader" />
+          <p>
+            Reading ORBI data
+            from blockchain...
+          </p>
+        </main>
+      </>
+    );
+  }
+
+  if (!profile) {
+    return null;
   }
 
   /* =======================================================
@@ -1929,3915 +1850,2438 @@ const loadPackages = useCallback(
   ======================================================= */
 
   return (
-    <div className="shell">
-      {/* SIDEBAR */}
+    <>
+      <style jsx global>
+        {GLOBAL_CSS}
+      </style>
 
-      <aside
-        className={`sidebar ${
-          mobileOpen
-            ? "open"
-            : ""
-        }`}
-      >
-        <div className="brand">
-          <img
-            src="/orbi-logo.png"
-            alt="ORBI"
-          />
-
-          <div>
-            <b>ORBIWORLD</b>
-            <small>
-              WORLD DASHBOARD
-            </small>
-          </div>
-        </div>
-
-        <button
-          className="mobileClose"
-          onClick={() =>
-            setMobileOpen(false)
-          }
-        >
-          ×
-        </button>
-
-        <nav>
-          <div className="navTitle">
-            MAIN
-          </div>
-
-          {MAIN_NAV.map(
-            (item) => (
-              <NavButton
-                key={item.id}
-                label={item.label}
-                icon={item.icon}
-                active={
-                  section ===
-                  item.id
-                }
-                onClick={() => {
-                  setSection(
-                    item.id
-                  );
-
-                  setMobileOpen(
-                    false
-                  );
-                }}
-              />
-            )
-          )}
-
-          <button
-            className="navGroupButton"
+      <div className="appShell">
+        {/* MOBILE OVERLAY */}
+        {mobileOpen && (
+          <div
+            className="mobileOverlay"
             onClick={() =>
-              setHistoryOpen(
-                (value) =>
-                  !value
-              )
+              setMobileOpen(false)
             }
-          >
+          />
+        )}
+
+        {/* SIDEBAR */}
+        <aside
+          className={`sidebar ${
+            mobileOpen
+              ? "sidebarOpen"
+              : ""
+          }`}
+        >
+          <div className="brand">
+            <img
+              src="/orbi-logo.png"
+              alt="ORBI"
+            />
+
+            <div>
+              <strong>
+                ORBI
+              </strong>
+
+              <span>
+                WORLD
+              </span>
+            </div>
+          </div>
+
+          <div className="walletMini">
             <span>
-              HISTORY
+              CONNECTED
             </span>
 
-            <span>
-              {historyOpen
-                ? "⌃"
-                : "⌄"}
-            </span>
-          </button>
+            <code>
+              {shortAddress(
+                account
+              )}
+            </code>
+          </div>
 
-          {historyOpen &&
-            HISTORY_NAV.map(
+          <nav className="nav">
+            {navigation.map(
               (item) => (
-                <NavButton
-                  key={
-                    item.id
-                  }
-                  label={
-                    item.label
-                  }
-                  icon="▤"
-                  active={
+                <button
+                  key={item.id}
+                  className={`navButton ${
                     section ===
                     item.id
-                  }
+                      ? "selected"
+                      : ""
+                  }`}
                   onClick={() => {
                     setSection(
                       item.id
                     );
-
                     setMobileOpen(
                       false
                     );
                   }}
-                />
+                >
+                  <span className="navIcon">
+                    {item.icon}
+                  </span>
+
+                  <span>
+                    {item.label}
+                  </span>
+                </button>
               )
             )}
+          </nav>
 
-          <NavButton
-            label="Profile"
-            icon="◉"
-            active={
-              section ===
-              "profile"
-            }
-            onClick={() => {
-              setSection(
-                "profile"
-              );
+          <div className="sidebarBottom">
+            <a
+              href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
+              target="_blank"
+              rel="noreferrer"
+              className="contractLink"
+            >
+              View Contract ↗
+            </a>
 
-              setMobileOpen(
-                false
-              );
-            }}
-          />
-        </nav>
-
-        <a
-          className="sideLink"
-          href={addressUrl(
-            CONTRACT_ADDRESS
-          )}
-          target="_blank"
-          rel="noreferrer"
-        >
-          View Contract ↗
-        </a>
-      </aside>
-
-      {/* MAIN */}
-
-      <main className="main">
-        <header className="topbar">
-          <button
-            className="mobileMenu"
-            onClick={() =>
-              setMobileOpen(true)
-            }
-          >
-            ☰
-          </button>
-
-          <div>
-            <span className="eyebrow">
-              ORBIWORLD • BSC TESTNET
-            </span>
-
-            <h1>
-              {titleFor(
-                section
-              )}
-            </h1>
-
-            <p>
-              Decentralized
-              ecosystem
-              dashboard
-            </p>
-          </div>
-
-          <div className="walletActions">
-            <div className="walletChip">
-              <i />
-              {shortAddress(
-                account
-              )}
+            <div className="networkPill">
+              ● BSC Testnet
             </div>
-
-            <button
-              className="secondary"
-              onClick={
-                refresh
-              }
-              disabled={
-                loading
-              }
-            >
-              {loading
-                ? "Syncing..."
-                : "Refresh"}
-            </button>
-
-            <button
-              className="secondary"
-              onClick={
-                disconnectWallet
-              }
-            >
-              Disconnect
-            </button>
           </div>
-        </header>
+        </aside>
 
-        {message && (
-          <div className="notice">
-            {message}
-          </div>
-        )}
-
-        {error && (
-          <div className="error">
-            <span>
-              {error}
-            </span>
-
+        {/* MAIN */}
+        <main className="main">
+          {/* HEADER */}
+          <header className="header">
             <button
+              className="menuButton"
               onClick={() =>
-                setError("")
+                setMobileOpen(
+                  !mobileOpen
+                )
               }
             >
-              ×
+              ☰
             </button>
-          </div>
-        )}
 
-        {!profile ? (
-          <RegistrationState
-            account={account}
-            connect={
-              connectWallet
-            }
-          />
-        ) : (
-          <DashboardContent
-            section={section}
-            setSection={
-              setSection
-            }
-            profile={
-              profile
-            }
-            config={
-              config
-            }
-            usdtBalance={
-              usdtBalance
-            }
-            packages={
-              packages
-            }
-            withdrawals={
-              withdrawals
-            }
-            rankHistory={
-              rankHistory
-            }
-            royaltyHistory={
-              royaltyHistory
-            }
-            team={team}
-            referralLink={
-              referralLink
-            }
-            stakeAmount={
-              stakeAmount
-            }
-            setStakeAmount={
-              setStakeAmount
-            }
-            activate={
-              activatePackage
-            }
-            topUp={
-              topUpPackage
-            }
-            busy={busy}
-            withdrawAmount={
-              withdrawAmount
-            }
-            setWithdrawAmount={
-              setWithdrawAmount
-            }
-            withdrawWallet={
-              withdrawWallet
-            }
-            setWithdrawWallet={
-              setWithdrawWallet
-            }
-            requestWithdrawal={
-              requestWithdrawal
-            }
-            emergencyWithdraw={
-              emergencyCapitalWithdraw
-            }
-          />
-        )}
-      </main>
-
-      <style jsx global>
-        {styles}
-      </style>
-    </div>
-  );
-}
-
-/* =========================================================
-   NAV COMPONENTS
-========================================================= */
-
-function NavButton({
-  label,
-  icon,
-  active,
-  onClick,
-}: {
-  label: string;
-  icon: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`navBtn ${
-        active
-          ? "active"
-          : ""
-      }`}
-      onClick={
-        onClick
-      }
-    >
-      <span className="navIcon">
-        {icon}
-      </span>
-
-      <span>
-        {label}
-      </span>
-    </button>
-  );
-}
-
-function titleFor(
-  section: Section
-) {
-  const titles: Record<
-    Section,
-    string
-  > = {
-    overview:
-      "Dashboard Overview",
-
-    packages:
-      "My Packages",
-
-    earnings:
-      "Earnings",
-
-    business:
-      "Business Center",
-
-    referral:
-      "Referral Center",
-
-      "level-income":
-  "Level Income",
-
-    rank:
-      "Rank Center",
-
-    royalty:
-      "Royalty Center",
-
-    withdrawal:
-      "Withdrawal",
-
-    emergency:
-      "Emergency Capital Withdrawal",
-
-    "history-staking":
-      "Staking History",
-
-    "history-withdrawal":
-      "Withdrawal History",
-
-    "history-rank":
-      "Rank Reward History",
-
-    "history-royalty":
-      "Royalty History",
-
-    profile:
-      "Profile",
-  };
-
-  return titles[section];
-}
-
-/* =========================================================
-   LOGIN SCREEN
-========================================================= */
-
-function LoginScreen({
-  connect,
-  busy,
-  error,
-}: {
-  connect: () => void;
-  busy: boolean;
-  error: string;
-}) {
-  return (
-    <div className="login">
-      <div className="loginCard">
-        <img
-          src="/orbi-logo.png"
-          alt="ORBI"
-        />
-
-        <span className="eyebrow">
-          ORBIWORLD
-        </span>
-
-        <h1>
-          Decentralized Dashboard
-        </h1>
-
-        <p>
-          Connect your Web3
-          wallet to access
-          staking, earnings,
-          referrals, rank,
-          royalty and
-          withdrawals.
-        </p>
-
-        {error && (
-          <div className="error">
-            {error}
-          </div>
-        )}
-
-        <button
-          className="primary"
-          onClick={connect}
-          disabled={busy}
-        >
-          {busy
-            ? "Connecting..."
-            : "Connect Wallet"}
-        </button>
-
-        <small>
-          BSC Testnet •
-          Smart Contract
-          Powered
-        </small>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   REGISTRATION STATE
-========================================================= */
-
-function RegistrationState({
-  account,
-  connect,
-}: {
-  account: string;
-  connect: () => void;
-}) {
-  return (
-    <section className="registrationCard">
-      <div className="registrationIcon">
-        ◎
-      </div>
-
-      <span className="eyebrow">
-        ACCOUNT SETUP
-      </span>
-
-      <h2>
-        ORBI registration
-        required
-      </h2>
-
-      <p>
-        This wallet is
-        connected, but no
-        ORBI on-chain
-        profile was found.
-      </p>
-
-      <div className="refExplain">
-        <b>
-          Connected Wallet
-        </b>
-
-        <code>
-          {shortAddress(
-            account
-          )}
-        </code>
-      </div>
-
-      <button
-        className="primary"
-        onClick={connect}
-      >
-        Check Referral &
-        Register
-      </button>
-
-      <small>
-        New users must
-        enter through a
-        valid ORBI referral
-        link.
-      </small>
-    </section>
-  );
-}
-
-/* =========================================================
-   DASHBOARD CONTENT
-========================================================= */
-
-function DashboardContent(
-  props: any
-) {
-  const {
-    section,
-    setSection,
-    profile,
-    config,
-    usdtBalance,
-    packages,
-    withdrawals,
-    rankHistory,
-    royaltyHistory,
-    team,
-    referralLink,
-    stakeAmount,
-    setStakeAmount,
-    activate,
-    topUp,
-    busy,
-    withdrawAmount,
-    setWithdrawAmount,
-    withdrawWallet,
-    setWithdrawWallet,
-    requestWithdrawal,
-    emergencyWithdraw,
-  } = props;
-
-  const total =
-    profile.earningWallet
-      .add(
-        profile.rankWallet
-      )
-      .add(
-        profile.royaltyWallet
-      );
-
-  switch (section) {
-    case "overview":
-  return (
-    <Overview
-      profile={profile}
-      usdtBalance={
-        usdtBalance
-      }
-      total={total}
-      packages={packages}
-      config={config}
-      setSection={
-        setSection
-      }
-    />
-  );
-    case "packages":
-      return (
-        <Packages
-          profile={profile}
-          config={config}
-          packages={packages}
-          amount={
-            stakeAmount
-          }
-          setAmount={
-            setStakeAmount
-          }
-          activate={
-            activate
-          }
-          topUp={
-            topUp
-          }
-          busy={busy}
-        />
-      );
-
-    case "earnings":
-      return (
-        <Earnings
-          profile={profile}
-        />
-      );
-
-      case "level-income":
-  return (
-    <LevelIncome
-      profile={profile}
-    />
-  );
-
-    case "business":
-      return (
-        <Business
-          profile={profile}
-          team={team}
-        />
-      );
-
-    case "referral":
-      return (
-        <Referral
-          profile={profile}
-          link={
-            referralLink
-          }
-        />
-      );
-
-    case "rank":
-      return (
-        <Rank
-          profile={profile}
-        />
-      );
-
-    case "royalty":
-      return (
-        <Royalty
-          profile={profile}
-          history={
-            royaltyHistory
-          }
-        />
-      );
-
-    case "withdrawal":
-      return (
-        <Withdrawal
-          profile={profile}
-          config={config}
-          amount={
-            withdrawAmount
-          }
-          setAmount={
-            setWithdrawAmount
-          }
-          wallet={
-            withdrawWallet
-          }
-          setWallet={
-            setWithdrawWallet
-          }
-          submit={
-            requestWithdrawal
-          }
-          busy={busy}
-        />
-      );
-
-    case "emergency":
-      return (
-        <Emergency
-          profile={profile}
-          config={config}
-          submit={
-            emergencyWithdraw
-          }
-          busy={busy}
-        />
-      );
-
-    case "history-staking":
-      return (
-        <History
-          title="Staking History"
-          headers={[
-            "Package",
-            "Amount",
-            "Max Payout",
-            "Status",
-            "Block",
-            "Tx",
-          ]}
-        >
-          {packages.map(
-            (
-              item: PackageRow
-            ) => (
-              <tr
-                key={
-                  item.packageId
-                }
-              >
-                <td>
-                  #
-                  {
-                    item.packageId
-                  }
-                </td>
-
-                <td>
-                  {money(
-                    item.amount
-                  )}{" "}
-                  USDT
-                </td>
-
-                <td>
-                  {money(
-                    item.amount.mul(
-                      MAX_MULTIPLIER
-                    )
-                  )}{" "}
-                  USDT
-                </td>
-
-                <td>
-                  <Pill
-                    value={
-                      item.closed
-                        ? "CLOSED"
-                        : "ACTIVE"
-                    }
-                  />
-                </td>
-
-                <td>
-                  {
-                    item.block
-                  }
-                </td>
-
-                <td>
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
-                </td>
-              </tr>
-            )
-          )}
-        </History>
-      );
-
-    case "history-withdrawal":
-      return (
-        <History
-          title="Withdrawal History"
-          headers={[
-            "Request",
-            "Wallet",
-            "Amount",
-            "Fee",
-            "Net",
-            "Status",
-            "Tx",
-          ]}
-        >
-          {withdrawals.map(
-            (
-              item: WithdrawalRow
-            ) => (
-              <tr
-                key={
-                  item.requestId
-                }
-              >
-                <td>
-                  #
-                  {
-                    item.requestId
-                  }
-                </td>
-
-                <td>
-                  {walletLabel(
-                    item.walletType
-                  )}
-                </td>
-
-                <td>
-                  {money(
-                    item.amount
-                  )}
-                </td>
-
-                <td>
-                  {money(
-                    item.fee
-                  )}
-                </td>
-
-                <td>
-                  {money(
-                    item.netAmount
-                  )}
-                </td>
-
-                <td>
-                  <Pill
-                    value={
-                      item.status
-                    }
-                  />
-                </td>
-
-                <td>
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
-                </td>
-              </tr>
-            )
-          )}
-        </History>
-      );
-
-    case "history-rank":
-      return (
-        <History
-          title="Rank Reward History"
-          headers={[
-            "Rank",
-            "Reward",
-            "Block",
-            "Tx",
-          ]}
-        >
-          {rankHistory.map(
-            (
-              item: RankRow,
-              index: number
-            ) => (
-              <tr
-                key={`${item.block}-${index}`}
-              >
-                <td>
-                  {rankLabel(
-                    item.rank
-                  )}
-                </td>
-
-                <td>
-                  {money(
-                    item.reward
-                  )}{" "}
-                  USDT
-                </td>
-
-                <td>
-                  {
-                    item.block
-                  }
-                </td>
-
-                <td>
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
-                </td>
-              </tr>
-            )
-          )}
-        </History>
-      );
-
-    case "history-royalty":
-      return (
-        <History
-          title="Royalty History"
-          headers={[
-            "Royalty",
-            "Amount",
-            "Block",
-            "Tx",
-          ]}
-        >
-          {royaltyHistory.map(
-            (
-              item: RoyaltyRow,
-              index: number
-            ) => (
-              <tr
-                key={`${item.block}-${index}`}
-              >
-                <td>
-                  {royaltyLabel(
-                    item.level
-                  )}
-                </td>
-
-                <td>
-                  {money(
-                    item.amount
-                  )}{" "}
-                  USDT
-                </td>
-
-                <td>
-                  {
-                    item.block
-                  }
-                </td>
-
-                <td>
-                  <a
-                    href={txUrl(
-                      item.tx
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
-                </td>
-              </tr>
-            )
-          )}
-        </History>
-      );
-
-    case "profile":
-      return (
-        <ProfileView
-          profile={
-            profile
-          }
-        />
-      );
-
-    default:
-      return null;
-  }
-}
-
-/* =========================================================
-   OVERVIEW
-========================================================= */
-
-function Overview({
-  profile,
-  usdtBalance,
-  total,
-  packages,
-  config,
-  setSection,
-}: any) {
-  const activePackage =
-    (packages as PackageRow[]).find(
-      (item) => !item.closed
-    ) || null;
-
-  const packageInfo =
-    activePackage
-      ? (() => {
-          const target =
-            activePackage.amount.mul(
-              MAX_MULTIPLIER
-            );
-
-          const roiTarget =
-            activePackage.amount;
-
-          const roiPaid =
-            activePackage.roiPaid.gt(
-              roiTarget
-            )
-              ? roiTarget
-              : activePackage.roiPaid;
-
-          const remaining =
-            roiTarget.gt(roiPaid)
-              ? roiTarget.sub(
-                  roiPaid
-                )
-              : ZERO;
-
-          const dailyROI =
-            activePackage.amount
-              .mul(config.roiBps)
-              .div(10000);
-
-          const daysRemaining =
-            dailyROI.gt(0)
-              ? remaining
-                  .add(dailyROI)
-                  .sub(1)
-                  .div(dailyROI)
-                  .toNumber()
-              : 0;
-
-          const progress =
-            roiTarget.gt(0)
-              ? Math.min(
-                  100,
-                  Number(
-                    roiPaid
-                      .mul(100)
-                      .div(
-                        roiTarget
-                      )
-                  )
-                )
-              : 0;
-
-          return {
-            target,
-            roiPaid,
-            remaining,
-            dailyROI,
-            daysRemaining,
-            progress,
-          };
-        })()
-      : null;
-
-  return (
-    <>
-      <div className="welcome">
-        <div>
-          <span className="eyebrow">
-            WELCOME BACK
-          </span>
-
-          <h2>
-            Build your
-            network. Grow
-            your business.
-          </h2>
-
-          <p>
-            {statusLabel(
-              profile.status
-            )}{" "}
-            • User #
-            {profile.id.toString()}
-          </p>
-        </div>
-
-        <div className="walletBalance">
-          <small>
-            USDT Wallet
-          </small>
-
-          <b>
-            {money(
-              usdtBalance
-            )}
-          </b>
-        </div>
-      </div>
-
-      <div className="grid four">
-        <Metric
-          title="Earning Wallet"
-          value={money(
-            profile.earningWallet
-          )}
-          sub="ROI + Level"
-        />
-
-        <Metric
-          title="Rank Wallet"
-          value={money(
-            profile.rankWallet
-          )}
-          sub="Rank rewards"
-        />
-
-        <Metric
-          title="Royalty Wallet"
-          value={money(
-            profile.royaltyWallet
-          )}
-          sub="Royalty income"
-        />
-
-        <Metric
-          title="Total Available"
-          value={money(total)}
-          sub="Withdrawable wallets"
-        />
-      </div>
-
-      <div className="grid four">
-        <Metric
-          title="Lifetime ROI"
-          value={money(
-            profile.totalROIIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Lifetime Level"
-          value={money(
-            profile.totalLevelIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Rank Rewards"
-          value={money(
-            profile.totalRankIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Royalty Income"
-          value={money(
-            profile.totalRoyaltyIncome
-          )}
-          sub="Cumulative"
-        />
-      </div>
-
-      <Card
-  title="Active Package"
->
-  {activePackage &&
-  packageInfo ? (
-    <>
-      <div className="grid four">
-        <Metric
-          title="Package"
-          value={`#${activePackage.packageId}`}
-          sub="On-chain"
-        />
-
-        <Metric
-          title="Staked"
-          value={`${money(
-            activePackage.amount
-          )} USDT`}
-          sub="Package amount"
-        />
-
-        <Metric
-          title="ROI Received"
-          value={`${money(
-            activePackage.roiPaid
-          )} USDT`}
-          sub="From package struct"
-        />
-
-        <Metric
-          title="Status"
-          value="ACTIVE"
-          sub="On-chain status"
-        />
-      </div>
-
-      <div className="grid four">
-        <Metric
-          title="Daily ROI"
-          value={`${(
-            config.roiBps / 100
-          ).toFixed(2)}%`}
-          sub="Contract config"
-        />
-
-        <Metric
-          title="Max Payout"
-          value={`${money(
-            packageInfo.target
-          )} USDT`}
-          sub="2× package"
-        />
-
-        <Metric
-          title="Remaining ROI"
-          value={`${money(
-            packageInfo.remaining
-          )} USDT`}
-          sub="To 2×"
-        />
-
-        <Metric
-          title="Days Remaining"
-          value={`${packageInfo.daysRemaining}`}
-          sub="Estimated"
-        />
-      </div>
-
-      <Progress
-        label="Progress to 2×"
-        value={
-          packageInfo.progress
-        }
-      />
-
-      <button
-        className="secondary full"
-        onClick={() =>
-          setSection(
-            "packages"
-          )
-        }
-      >
-        Open My Packages
-      </button>
-    </>
-  ) : (
-    <>
-      <p className="muted">
-        No active package found
-        on-chain.
-      </p>
-
-      <button
-        className="secondary full"
-        onClick={() =>
-          setSection(
-            "packages"
-          )
-        }
-      >
-        Open My Packages
-      </button>
-    </>
-  )}
-</Card>
-
-      <div className="two">
-        <Card title="Business Snapshot">
-          <Row
-            label="Today Business"
-            value={`${money(
-              profile.todayBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="30-Day Business"
-            value={`${money(
-              profile.monthlyBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Lifetime Business"
-            value={`${money(
-              profile.lifetimeBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Power Leg"
-            value={`${money(
-              profile.powerLegBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Other Leg"
-            value={`${money(
-              profile.otherLegBusiness
-            )} USDT`}
-          />
-        </Card>
-
-        <Card title="Current Qualification">
-          <Row
-            label="Rank"
-            value={rankLabel(
-              profile.rank
-            )}
-          />
-
-          <Row
-            label="Royalty"
-            value={royaltyLabel(
-              profile.royalty
-            )}
-          />
-
-          <Row
-            label="Directs"
-            value={String(
-              profile.directCount
-            )}
-          />
-
-          <Row
-            label="Active Directs"
-            value={String(
-              profile.activeDirectCount
-            )}
-          />
-
-          <button
-            className="secondary full"
-            onClick={() =>
-              setSection(
-                "referral"
-              )
-            }
-          >
-            Open Referral Center
-          </button>
-        </Card>
-      </div>
-    </>
-  );
-}
-
-/* =========================================================
-   PACKAGES
-========================================================= */
-
-function Packages({
-  config,
-  packages,
-  amount,
-  setAmount,
-  activate,
-  topUp,
-  busy,
-}: any) {
-  return (
-    <>
-      <Page
-        title="My Packages"
-        sub="On-chain package activity and staking controls."
-      />
-
-      <div className="grid four">
-        <Metric
-          title="Minimum Stake"
-          value={`${money(
-            config.minStake
-          )} USDT`}
-          sub="Contract config"
-        />
-
-        <Metric
-          title="Minimum Top-up"
-          value={`${money(
-            config.minTopup
-          )} USDT`}
-          sub="Contract config"
-        />
-
-        <Metric
-          title="Daily ROI"
-          value={`${(
-            config.roiBps / 100
-          ).toFixed(2)}%`}
-          sub="Contract config"
-        />
-
-        <Metric
-          title="Max Payout"
-          value={`${MAX_MULTIPLIER}×`}
-          sub="Per package"
-        />
-      </div>
-
-      <div className="grid four">
-        <Metric
-          title="Actual ROI Received"
-          value={`${money(
-            packages.reduce(
-  (
-    total: ethers.BigNumber,
-    item: PackageRow
-  ) => total.add(item.roiPaid),
-  ZERO
-)
-          )} USDT`}
-          sub="From package struct (roiPaid)"
-        />
-
-        <Metric
-          title="Package Count"
-          value={String(
-            packages.length
-          )}
-          sub="Detected on-chain"
-        />
-      </div>
-
-      <Card title="Activate / Top Up">
-        <div className="formGrid">
-          <input
-            value={amount}
-            onChange={(e) =>
-              setAmount(
-                e.target.value
-              )
-            }
-            placeholder={`Amount (min ${money(
-              config.minStake
-            )} USDT)`}
-            inputMode="decimal"
-          />
-
-          <button
-            className="primary"
-            disabled={
-              busy ||
-              !config.stakingEnabled
-            }
-            onClick={
-              activate
-            }
-          >
-            {busy
-              ? "Processing..."
-              : "Activate Package"}
-          </button>
-
-          <button
-            className="secondary"
-            disabled={
-              busy ||
-              !config.stakingEnabled
-            }
-            onClick={
-              topUp
-            }
-          >
-            Top Up
-          </button>
-        </div>
-
-        <p className="muted">
-          USDT approval is
-          requested only when
-          the current allowance
-          is insufficient.
-        </p>
-      </Card>
-
-      {packages.map(
-        (item: PackageRow) => {
-          const target =
-            item.amount.mul(
-              MAX_MULTIPLIER
-            );
-
-          const dailyROI =
-            item.amount
-              .mul(config.roiBps)
-              .div(10000);
-
-          const progress =
-            target.gt(0)
-              ? Math.min(
-                  100,
-                  Number(
-                    item.roiPaid
-                      .mul(100)
-                      .div(target)
-                  )
-                )
-              : 0;
-
-          const remaining =
-            target.gt(item.roiPaid)
-              ? target.sub(
-                  item.roiPaid
-                )
-              : ZERO;
-
-          const daysTo2x =
-            dailyROI.gt(0)
-              ? remaining
-                  .add(dailyROI)
-                  .sub(1)
-                  .div(dailyROI)
-                  .toNumber()
-              : 0;
-
-          return (
-            <div
-              key={item.packageId}
-              className="two"
-              style={{
-                marginTop: 18,
-              }}
-            >
-              <Card
-                title={`Staking Info • Package #${item.packageId}`}
-              >
-                <Row
-                  label="Staked"
-                  value={`${money(
-                    item.amount
-                  )} USDT`}
-                />
-
-                <Row
-                  label="Target (2×)"
-                  value={`${money(
-                    target
-                  )} USDT`}
-                />
-
-                <Row
-                  label="Daily ROI"
-                  value={`${(
-                    config.roiBps /
-                    100
-                  ).toFixed(2)}%`}
-                />
-
-                <Row
-                  label="ROI Received"
-                  value={`${money(
-                    item.roiPaid
-                  )} USDT`}
-                />
-
-                <Row
-                  label="Days to 2×"
-                  value={
-                    item.closed
-                      ? "Completed"
-                      : `${daysTo2x} days`
-                  }
-                />
-
-                <Row
-                  label="Package Status"
-                  value={
-                    item.closed
-                      ? "Closed"
-                      : "Active"
-                  }
-                />
-
-                <Progress
-                  label="Progress to 2×"
-                  value={progress}
-                />
-
-                <p className="muted">
-                  Progress and days-to-2× are
-                  calculated from the package
-                  struct stored on-chain.
-                </p>
-
-                <p className="muted">
-                  Package data is read directly from contract storage.
-                </p>
-              </Card>
-
-
+            <div>
+              <span className="headerEyebrow">
+                ORBIWORLD
+              </span>
+
+              <h1>
+                {section ===
+                  "overview" &&
+                  "Dashboard Overview"}
+
+                {section ===
+                  "packages" &&
+                  "My Packages"}
+
+                {section ===
+                  "business" &&
+                  "Business Center"}
+
+                {section ===
+                  "earnings" &&
+                  "Earnings"}
+
+                {section ===
+                  "referral" &&
+                  "Referral Center"}
+
+                {section ===
+                  "withdrawal" &&
+                  "Withdrawal"}
+
+                {section ===
+                  "profile" &&
+                  "My Profile"}
+              </h1>
             </div>
-          );
-        }
-      )}
 
-      {packages.length === 0 && (
-        <Card title="Staking Info">
-          <p className="muted">
-            No staking packages were found
-            for this wallet on-chain.
-          </p>
-        </Card>
-      )}
-    </>
-  );
-}
-
-/* =========================================================
-   EARNINGS
-========================================================= */
-
-function Earnings({
-  profile,
-}: any) {
-  return (
-    <>
-      <Page
-        title="Earnings"
-        sub="Balances and cumulative income stored by the contract."
-      />
-
-      <div className="grid four">
-        <Metric
-          title="ROI Income"
-          value={money(
-            profile.totalROIIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Level Income"
-          value={money(
-            profile.totalLevelIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Rank Income"
-          value={money(
-            profile.totalRankIncome
-          )}
-          sub="Cumulative"
-        />
-
-        <Metric
-          title="Royalty Income"
-          value={money(
-            profile.totalRoyaltyIncome
-          )}
-          sub="Cumulative"
-        />
-      </div>
-
-      <Card title="Wallet Balances">
-        <Row
-          label="Earning Wallet (ROI + Level)"
-          value={`${money(
-            profile.earningWallet
-          )} USDT`}
-        />
-
-        <Row
-          label="Rank Wallet"
-          value={`${money(
-            profile.rankWallet
-          )} USDT`}
-        />
-
-        <Row
-          label="Royalty Wallet"
-          value={`${money(
-            profile.royaltyWallet
-          )} USDT`}
-        />
-
-        <Row
-          label="Total Withdrawn"
-          value={`${money(
-            profile.totalWithdrawn
-          )} USDT`}
-        />
-      </Card>
-    </>
-  );
-}
-
-/* =========================================================
-   LEVEL INCOME
-========================================================= */
-
-/* =========================================================
-   LEVEL INCOME
-========================================================= */
-
-function LevelIncome({
-  profile,
-}: any) {
-  return (
-    <>
-      <div className="sectionHead">
-        <div>
-          <span className="eyebrow">
-            ORBIWORLD
-          </span>
-
-          <h2>
-            Level Income
-          </h2>
-
-          <p>
-            Track your network-based level
-            income and business qualification.
-          </p>
-        </div>
-      </div>
-
-      {/* TOP METRICS */}
-
-      <div className="grid four">
-
-        <Metric
-          title="Total Level Income"
-          value={money(
-            profile.totalLevelIncome
-          )}
-          sub="Lifetime cumulative"
-        />
-
-        <Metric
-          title="Earning Wallet"
-          value={money(
-            profile.earningWallet
-          )}
-          sub="ROI + Level"
-        />
-
-        <Metric
-          title="Direct Members"
-          value={String(
-            profile.directCount
-          )}
-          sub="Total direct members"
-        />
-
-        <Metric
-          title="Active Directs"
-          value={String(
-            profile.activeDirectCount
-          )}
-          sub="Currently active"
-        />
-
-      </div>
-
-      {/* SUMMARY */}
-
-      <div className="two">
-
-        <Card title="Level Income Summary">
-
-          <Row
-            label="Lifetime Level Income"
-            value={`${money(
-              profile.totalLevelIncome
-            )} USDT`}
-          />
-
-          <Row
-            label="Current Earning Wallet"
-            value={`${money(
-              profile.earningWallet
-            )} USDT`}
-          />
-
-          <Row
-            label="Lifetime Business"
-            value={`${money(
-              profile.lifetimeBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Monthly Business"
-            value={`${money(
-              profile.monthlyBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Today's Business"
-            value={`${money(
-              profile.todayBusiness
-            )} USDT`}
-          />
-
-        </Card>
-
-
-        <Card title="Network Qualification">
-
-          <Row
-            label="Direct Members"
-            value={String(
-              profile.directCount
-            )}
-          />
-
-          <Row
-            label="Active Directs"
-            value={String(
-              profile.activeDirectCount
-            )}
-          />
-
-          <Row
-            label="Level Income Status"
-            value="Active"
-          />
-
-          <Row
-            label="Network Business"
-            value={`${money(
-              profile.lifetimeBusiness
-            )} USDT`}
-          />
-
-        </Card>
-
-      </div>
-
-
-      {/* LEVEL STRUCTURE */}
-
-      <Card title="Level Structure">
-  <div className="levelTable">
-
-    <div className="levelTableHead">
-      <span>LEVEL</span>
-      <span>PERCENT</span>
-      <span>STATUS</span>
-    </div>
-
-    {[
-      { level: 1, percent: "10%" },
-      { level: 2, percent: "5%" },
-      { level: 3, percent: "3%" },
-      { level: 4, percent: "2%" },
-      { level: 5, percent: "1%" },
-      { level: 6, percent: "1%" },
-      { level: 7, percent: "1%" },
-      { level: 8, percent: "1%" },
-      { level: 9, percent: "1%" },
-      { level: 10, percent: "1%" },
-    ].map((item) => {
-      const isOpen =
-        Number(profile.activeDirectCount || 0) >= item.level;
-
-      return (
-        <div
-          className="levelTableRow"
-          key={item.level}
-        >
-          <span>L{item.level}</span>
-
-          <span>
-            {item.percent}
-          </span>
-
-          <span
-            className={
-              isOpen
-                ? "levelStatus open"
-                : "levelStatus pending"
-            }
-          >
-            {isOpen ? "OPEN" : "PENDING"}
-          </span>
-        </div>
-      );
-    })}
-
-  </div>
-</Card>
-
-    </>
-  );
-}
-
-/* =========================================================
-   BUSINESS
-========================================================= */
-
-function Business({
-  profile,
-  team,
-}: any) {
-  return (
-    <>
-      <Page
-        title="Business Center"
-        sub="Business metrics read directly from your on-chain profile."
-      />
-
-      <div className="grid three">
-        <Metric
-          title="Today"
-          value={`${money(
-            profile.todayBusiness
-          )} USDT`}
-          sub="Current day"
-        />
-
-        <Metric
-          title="30-Day"
-          value={`${money(
-            profile.monthlyBusiness
-          )} USDT`}
-          sub="Current month window"
-        />
-
-        <Metric
-          title="Lifetime"
-          value={`${money(
-            profile.lifetimeBusiness
-          )} USDT`}
-          sub="Lifetime business"
-        />
-      </div>
-
-      <div className="two">
-        <Card title="Leg Business">
-          <Row
-            label="Power Leg"
-            value={`${money(
-              profile.powerLegBusiness
-            )} USDT`}
-          />
-
-          <Row
-            label="Other Leg"
-            value={`${money(
-              profile.otherLegBusiness
-            )} USDT`}
-          />
-        </Card>
-
-        <Card title="Team Stats">
-          <Row
-            label="Direct Referrals"
-            value={String(
-              profile.directCount
-            )}
-          />
-
-          <Row
-            label="Active Directs"
-            value={String(
-              profile.activeDirectCount
-            )}
-          />
-
-          <Row
-            label="Sponsor ID"
-            value={`#${profile.sponsorId.toString()}`}
-          />
-        </Card>
-      </div>
-
-      <Card title="My Direct Team">
-        {team.length === 0 ? (
-          <Empty
-            text="No direct registrations found yet."
-          />
-        ) : (
-          <div className="team">
-            {team.map(
-              (member: TeamRow) => (
-                <div
-                  className="teamRow"
-                  key={
-                    member.id
+            <div className="headerActions">
+              <button
+                className="refreshButton"
+                disabled={
+                  loading
+                }
+                onClick={async () => {
+                  if (!contract) {
+                    return;
                   }
-                >
-                  <div>
-                    <b>
-                      #
-                      {
-                        member.id
-                      }
-                    </b>
 
-                    <span>
-                      {shortAddress(
-                        member.wallet
-                      )}
-                    </span>
-                  </div>
+                  setLoading(true);
 
-                  <div>
-                    <span>
-                      {statusLabel(
-                        member.status
-                      )}
-                    </span>
-
-                    <small>
-                      Directs{" "}
-                      {
-                        member.directCount
-                      }{" "}
-                      • Active{" "}
-                      {
-                        member.activeDirectCount
-                      }
-                    </small>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        )}
-      </Card>
-    </>
-  );
-}
-
-/* =========================================================
-   REFERRAL
-========================================================= */
-
-function Referral({
-  profile,
-  link,
-}: any) {
-  async function copyReferral() {
-    try {
-      await navigator.clipboard.writeText(
-        link
-      );
-    } catch {
-      return;
-    }
-  }
-
-  return (
-    <>
-      <Page
-        title="Referral Center"
-        sub="Your unique sponsor link is generated from your wallet."
-      />
-
-      <Card title="Your Referral Link">
-        <div className="refBox">
-          <input
-            readOnly
-            value={link}
-          />
-
-          <button
-            className="primary"
-            onClick={
-              copyReferral
-            }
-          >
-            Copy Link
-          </button>
-        </div>
-
-        <div className="grid three">
-          <Metric
-            title="Direct Referrals"
-            value={String(
-              profile.directCount
-            )}
-            sub="Registered"
-          />
-
-          <Metric
-            title="Active Directs"
-            value={String(
-              profile.activeDirectCount
-            )}
-            sub="Active"
-          />
-
-          <Metric
-            title="Sponsor ID"
-            value={`#${profile.sponsorId.toString()}`}
-            sub="Your sponsor"
-          />
-        </div>
-      </Card>
-
-      <Card title="How Registration Works">
-        <ol className="steps">
-          <li>
-            Share your referral
-            link.
-          </li>
-
-          <li>
-            New user connects
-            MetaMask.
-          </li>
-
-          <li>
-            ORBI reads the
-            <code>
-              ?ref=
-            </code>{" "}
-            wallet.
-          </li>
-
-          <li>
-            User confirms one
-            registration
-            transaction.
-          </li>
-
-          <li>
-            After confirmation
-            the full dashboard
-            opens.
-          </li>
-        </ol>
-      </Card>
-    </>
-  );
-}
-
-/* =========================================================
-   RANK
-========================================================= */
-
-function Rank({
-  profile,
-}: any) {
-  return (
-    <>
-      <Page
-        title="Rank Center"
-        sub="Rank qualification uses Power Leg and Other Leg business."
-      />
-
-      <div className="grid three">
-        <Metric
-          title="Current Rank"
-          value={rankLabel(
-            profile.rank
-          )}
-          sub="On-chain rank"
-        />
-
-        <Metric
-          title="Rank Wallet"
-          value={`${money(
-            profile.rankWallet
-          )} USDT`}
-          sub="Available"
-        />
-
-        <Metric
-          title="Total Rank Rewards"
-          value={`${money(
-            profile.totalRankIncome
-          )} USDT`}
-          sub="Cumulative"
-        />
-      </div>
-
-      <div className="rankGrid">
-        {RANKS.map(
-          (
-            rank,
-            index
-          ) => {
-            const achieved =
-              profile.rank >=
-              index + 1;
-
-            const powerRequirement =
-              parseUSDT(
-                String(
-                  rank.power
-                )
-              );
-
-            const otherRequirement =
-              parseUSDT(
-                String(
-                  rank.other
-                )
-              );
-
-            const powerProgress =
-              Math.min(
-                100,
-                Number(
-                  profile.powerLegBusiness
-                    .mul(100)
-                    .div(
-                      powerRequirement
-                    )
-                )
-              );
-
-            const otherProgress =
-              Math.min(
-                100,
-                Number(
-                  profile.otherLegBusiness
-                    .mul(100)
-                    .div(
-                      otherRequirement
-                    )
-                )
-              );
-
-            return (
-              <Card
-                key={
-                  rank.name
-                }
-                title={
-                  rank.name
-                }
+                  try {
+                    await loadDashboard(
+                      contract,
+                      account
+                    );
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
               >
-                <div className="rankReward">
-                  {rank.reward.toLocaleString()}{" "}
-                  USDT
-                </div>
+                ↻ Refresh
+              </button>
 
-                <p className="muted">
-                  Power{" "}
-                  {rank.power.toLocaleString()}{" "}
-                  • Other{" "}
-                  {rank.other.toLocaleString()}
-                </p>
-
-                <Progress
-                  label="Power"
-                  value={
-                    powerProgress
-                  }
-                />
-
-                <Progress
-                  label="Other"
-                  value={
-                    otherProgress
-                  }
-                />
-
-                <Pill
-                  value={
-                    achieved
-                      ? "ACHIEVED"
-                      : "LOCKED"
-                  }
-                />
-              </Card>
-            );
-          }
-        )}
-      </div>
-    </>
-  );
-}
-
-/* =========================================================
-   ROYALTY
-========================================================= */
-
-function Royalty({
-  profile,
-  history,
-}: any) {
-  return (
-    <>
-      <Page
-        title="Royalty Center"
-        sub="Royalty qualification is based on business and active directs."
-      />
-
-      <div className="grid three">
-        <Metric
-          title="Current Royalty"
-          value={royaltyLabel(
-            profile.royalty
-          )}
-          sub="On-chain level"
-        />
-
-        <Metric
-          title="Royalty Wallet"
-          value={`${money(
-            profile.royaltyWallet
-          )} USDT`}
-          sub="Available"
-        />
-
-        <Metric
-          title="Total Royalty"
-          value={`${money(
-            profile.totalRoyaltyIncome
-          )} USDT`}
-          sub="Cumulative"
-        />
-      </div>
-
-      <div className="two">
-        {ROYALTIES.map(
-          (royalty) => {
-            const requirement =
-              parseUSDT(
-                String(
-                  royalty.lifetime
-                )
-              );
-
-            const progress =
-              Math.min(
-                100,
-                Number(
-                  profile.lifetimeBusiness
-                    .mul(100)
-                    .div(
-                      requirement
-                    )
-                )
-              );
-
-            return (
-              <Card
-                key={
-                  royalty.name
-                }
-                title={`Royalty ${royalty.name}`}
-              >
-                <Row
-                  label="Lifetime"
-                  value={`${money(
-                    profile.lifetimeBusiness
-                  )} / ${royalty.lifetime.toLocaleString()} USDT`}
-                />
-
-                <Row
-                  label="30-Day"
-                  value={`${money(
-                    profile.monthlyBusiness
-                  )} / ${royalty.monthly.toLocaleString()} USDT`}
-                />
-
-                <Row
-                  label="Active Directs"
-                  value={`${profile.activeDirectCount} / ${royalty.directs}`}
-                />
-
-                <Progress
-                  label="Lifetime"
-                  value={
-                    progress
-                  }
-                />
-              </Card>
-            );
-          }
-        )}
-      </div>
-
-      <History
-        title="Royalty History"
-        headers={[
-          "Level",
-          "Amount",
-          "Block",
-          "Tx",
-        ]}
-      >
-        {history.map(
-          (
-            item: RoyaltyRow,
-            index: number
-          ) => (
-            <tr
-              key={`${item.block}-${index}`}
-            >
-              <td>
-                {royaltyLabel(
-                  item.level
+              <div className="accountChip">
+                <span className="onlineDot" />
+                {shortAddress(
+                  account
                 )}
-              </td>
+              </div>
+            </div>
+          </header>
 
-              <td>
-                {money(
-                  item.amount
-                )}{" "}
-                USDT
-              </td>
+          {/* NOTICES */}
+          {(error || info) && (
+            <div className="noticeWrap">
+              {error && (
+                <div className="errorBox">
+                  {error}
+                </div>
+              )}
 
-              <td>
-                {item.block}
-              </td>
+              {info && (
+                <div className="infoBox">
+                  {info}
+                </div>
+              )}
+            </div>
+          )}
 
-              <td>
-                <a
-                  href={txUrl(
-                    item.tx
+          {/* =================================================
+              OVERVIEW
+          ================================================= */}
+          {section ===
+            "overview" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="ACCOUNT"
+                title={`Welcome, User #${profile.id.toString()}`}
+                description="Live account information read directly from the ORBI smart contract."
+              />
+
+              <div className="statsGrid">
+                <StatCard
+                  label="Active Packages"
+                  value={activePackages.length.toString()}
+                  sub={`of ${packages.length} total`}
+                />
+
+                <StatCard
+                  label="Active Capital"
+                  value={`$${formatUSDT(
+                    activeCapital
+                  )}`}
+                  sub="On-chain"
+                />
+
+                <StatCard
+                  label="ROI Income"
+                  value={`$${formatUSDT(
+                    profile.totalROIIncome
+                  )}`}
+                  sub="Lifetime"
+                />
+
+                <StatCard
+                  label="Level Income"
+                  value={`$${formatUSDT(
+                    profile.totalLevelIncome
+                  )}`}
+                  sub="Lifetime"
+                />
+              </div>
+
+              <div className="overviewGrid">
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        ACTIVE PACKAGE
+                      </span>
+
+                      <h3>
+                        Current Staking
+                      </h3>
+                    </div>
+
+                    <button
+                      className="textButton"
+                      onClick={() =>
+                        setSection(
+                          "packages"
+                        )
+                      }
+                    >
+                      View All →
+                    </button>
+                  </div>
+
+                  {activePackage ? (
+                    <PackageCard
+                      pkg={
+                        activePackage
+                      }
+                    />
+                  ) : (
+                    <EmptyState
+                      title="No active package"
+                      description="No package with ACTIVE status is currently present in the active package list."
+                    />
                   )}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View
-                </a>
-              </td>
-            </tr>
-          )
-        )}
-      </History>
-    </>
-  );
-}
+                </div>
 
-/* =========================================================
-   WITHDRAWAL
-========================================================= */
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        ACCOUNT STATUS
+                      </span>
 
-function Withdrawal({
-  profile,
-  config,
-  amount,
-  setAmount,
-  wallet,
-  setWallet,
-  submit,
-  busy,
-}: any) {
-  const available =
-    wallet ===
-    WalletType.EARNING
-      ? profile.earningWallet
-      : wallet ===
-        WalletType.RANK
-      ? profile.rankWallet
-      : profile.royaltyWallet;
+                      <h3>
+                        On-chain Profile
+                      </h3>
+                    </div>
+                  </div>
 
-  const numericAmount =
-    Number(
-      amount || "0"
-    );
+                  <div className="profileSummary">
+                    <div>
+                      <span>
+                        Status
+                      </span>
 
-  const fee =
-    numericAmount *
-    (config.feeBps / 10000);
+                      <strong className="greenText">
+                        {statusLabel(
+                          profile.status
+                        )}
+                      </strong>
+                    </div>
 
-  const net =
-    Math.max(
-      0,
-      numericAmount - fee
-    );
+                    <div>
+                      <span>
+                        User ID
+                      </span>
 
-  return (
-    <>
-      <Page
-        title="Withdrawal"
-        sub="Create an on-chain withdrawal request. Release is handled by the authorized withdrawal role."
-      />
+                      <strong>
+                        #
+                        {profile.id.toString()}
+                      </strong>
+                    </div>
 
-      <div className="grid three">
-        <Metric
-          title="Earning"
-          value={`${money(
-            profile.earningWallet
-          )} USDT`}
-          sub="ROI + Level"
-        />
+                    <div>
+                      <span>
+                        Sponsor
+                      </span>
 
-        <Metric
-          title="Rank"
-          value={`${money(
-            profile.rankWallet
-          )} USDT`}
-          sub="Rewards"
-        />
+                      <strong>
+                        #
+                        {profile.sponsorId.toString()}
+                      </strong>
+                    </div>
 
-        <Metric
-          title="Royalty"
-          value={`${money(
-            profile.royaltyWallet
-          )} USDT`}
-          sub="Rewards"
-        />
-      </div>
+                    <div>
+                      <span>
+                        Directs
+                      </span>
 
-      <Card title="Request Withdrawal">
-        <div className="formGrid">
-          <select
-            value={wallet}
-            onChange={(e) =>
-              setWallet(
-                Number(
-                  e.target.value
-                )
-              )
-            }
-          >
-            <option value={0}>
-              Earning Wallet
-            </option>
+                      <strong>
+                        {
+                          profile.directCount
+                        }
+                      </strong>
+                    </div>
 
-            <option value={1}>
-              Rank Wallet
-            </option>
+                    <div>
+                      <span>
+                        Active Directs
+                      </span>
 
-            <option value={2}>
-              Royalty Wallet
-            </option>
-          </select>
+                      <strong>
+                        {
+                          profile.activeDirectCount
+                        }
+                      </strong>
+                    </div>
 
-          <input
-            value={amount}
-            onChange={(e) =>
-              setAmount(
-                e.target.value
-              )
-            }
-            placeholder={`Minimum ${money(
-              config.minWithdrawal
-            )} USDT`}
-            inputMode="decimal"
-          />
+                    <div>
+                      <span>
+                        Rank
+                      </span>
 
-          <button
-            className="primary"
-            disabled={
-              busy ||
-              !config.withdrawalEnabled
-            }
-            onClick={
-              submit
-            }
-          >
-            {busy
-              ? "Processing..."
-              : "Request Withdrawal"}
-          </button>
-        </div>
+                      <strong>
+                        R{profile.rank}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-        <div className="fee">
-          <span>
-            Selected Balance{" "}
-            <b>
-              {money(
-                available
-              )}{" "}
-              USDT
-            </b>
-          </span>
+              <div className="statsGrid">
+                <StatCard
+                  label="Lifetime Business"
+                  value={`$${formatUSDT(
+                    profile.lifetimeBusiness
+                  )}`}
+                />
 
-          <span>
-            Estimated Fee{" "}
-            <b>
-              {fee.toFixed(
-                2
-              )}{" "}
-              USDT
-            </b>
-          </span>
+                <StatCard
+                  label="Monthly Business"
+                  value={`$${formatUSDT(
+                    profile.monthlyBusiness
+                  )}`}
+                />
 
-          <span>
-            Estimated Net{" "}
-            <b>
-              {net.toFixed(
-                2
-              )}{" "}
-              USDT
-            </b>
-          </span>
-        </div>
-      </Card>
-    </>
-  );
-}
+                <StatCard
+                  label="Today Business"
+                  value={`$${formatUSDT(
+                    profile.todayBusiness
+                  )}`}
+                />
 
-/* =========================================================
-   EMERGENCY CAPITAL WITHDRAWAL
-========================================================= */
-
-function Emergency({
-  profile,
-  config,
-  submit,
-  busy,
-}: any) {
-  const eligible =
-    profile.status === 2;
-
-  return (
-    <>
-      <Page
-        title="Emergency Capital Withdrawal"
-        sub="Permanent exit mechanism provided by the smart contract."
-      />
-
-      <Card title="Important">
-        <div className="dangerBox">
-          <b>
-            This action is irreversible.
-          </b>
-
-          <p>
-            The smart contract
-            closes your active
-            packages and changes
-            your account to
-            Emergency Exit.
-            Capital return is
-            calculated entirely
-            by the contract.
-          </p>
-
-          <button
-            className="danger"
-            disabled={
-              busy ||
-              !config.capitalWithdrawalEnabled ||
-              !eligible
-            }
-            onClick={
-              submit
-            }
-          >
-            {busy
-              ? "Processing..."
-              : "Emergency Capital Withdrawal"}
-          </button>
-
-          {!eligible && (
-            <p className="muted">
-              Emergency withdrawal
-              is available only
-              while the account is
-              ACTIVE.
-            </p>
+                <StatCard
+                  label="Total Withdrawn"
+                  value={`$${formatUSDT(
+                    profile.totalWithdrawn
+                  )}`}
+                />
+              </div>
+            </section>
           )}
-        </div>
-      </Card>
-    </>
-  );
-}
 
-/* =========================================================
-   PROFILE
-========================================================= */
+          {/* =================================================
+              PACKAGES
+          ================================================= */}
+          {section ===
+            "packages" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="STAKING"
+                title="My Packages"
+                description="Complete staking history and current active packages from contract storage."
+              />
 
-function ProfileView({
-  profile,
-}: any) {
-  return (
-    <>
-      <Page
-        title="Profile"
-        sub="Your on-chain account information."
-      />
+              <div className="statsGrid">
+                <StatCard
+                  label="Total Packages"
+                  value={packages.length.toString()}
+                />
 
-      <Card title="Wallet & Account">
-        <Row
-          label="Wallet"
-          value={
-            profile.wallet
-          }
-        />
+                <StatCard
+                  label="Active"
+                  value={activePackages.length.toString()}
+                />
 
-        <Row
-          label="User ID"
-          value={`#${profile.id.toString()}`}
-        />
+                <StatCard
+                  label="Closed"
+                  value={closedPackages.length.toString()}
+                />
 
-        <Row
-          label="Sponsor ID"
-          value={`#${profile.sponsorId.toString()}`}
-        />
+                <StatCard
+                  label="Total Staked"
+                  value={`$${formatUSDT(
+                    totalStaked
+                  )}`}
+                />
+              </div>
 
-        <Row
-          label="Status"
-          value={statusLabel(
-            profile.status
+              <div className="packageToolbar">
+                <div>
+                  <strong>
+                    Active Packages
+                  </strong>
+
+                  <span>
+                    {activePackages.length} on-chain
+                  </span>
+                </div>
+              </div>
+
+              {activePackages.length >
+              0 ? (
+                <div className="packageList">
+                  {activePackages.map(
+                    (pkg) => (
+                      <PackageCard
+                        key={
+                          pkg.packageId
+                        }
+                        pkg={pkg}
+                      />
+                    )
+                  )}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No active packages"
+                  description="The contract returned no active package IDs for this user."
+                />
+              )}
+
+              <div className="historyHeading">
+                <h3>
+                  Staking History
+                </h3>
+
+                <span>
+                  {packages.length} packages
+                </span>
+              </div>
+
+              {packages.length >
+              0 ? (
+                <div className="packageList">
+                  {packages.map(
+                    (pkg) => (
+                      <PackageCard
+                        key={
+                          `history-${pkg.packageId}`
+                        }
+                        pkg={pkg}
+                      />
+                    )
+                  )}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No staking history"
+                  description="No package IDs were returned by getUserPackages()."
+                />
+              )}
+            </section>
           )}
-        />
 
-        <Row
-          label="Rank"
-          value={rankLabel(
-            profile.rank
+          {/* =================================================
+              BUSINESS
+          ================================================= */}
+          {section ===
+            "business" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="NETWORK"
+                title="Business Center"
+                description="Business figures are read from the user's on-chain profile."
+              />
+
+              <div className="statsGrid">
+                <StatCard
+                  label="Lifetime Business"
+                  value={`$${formatUSDT(
+                    profile.lifetimeBusiness
+                  )}`}
+                />
+
+                <StatCard
+                  label="Monthly Business"
+                  value={`$${formatUSDT(
+                    profile.monthlyBusiness
+                  )}`}
+                />
+
+                <StatCard
+                  label="Today Business"
+                  value={`$${formatUSDT(
+                    profile.todayBusiness
+                  )}`}
+                />
+
+                <StatCard
+                  label="Direct Users"
+                  value={profile.directCount.toString()}
+                />
+              </div>
+
+              <div className="businessGrid">
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        LEGS
+                      </span>
+
+                      <h3>
+                        Business Distribution
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="businessRows">
+                    <div>
+                      <span>
+                        Power Leg
+                      </span>
+
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.powerLegBusiness
+                        )}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Other Leg
+                      </span>
+
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.otherLegBusiness
+                        )}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Active Directs
+                      </span>
+
+                      <strong>
+                        {
+                          profile.activeDirectCount
+                        }
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Total Directs
+                      </span>
+
+                      <strong>
+                        {
+                          profile.directCount
+                        }
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        TEAM
+                      </span>
+
+                      <h3>
+                        Direct Team
+                      </h3>
+                    </div>
+
+                    <button
+                      className="textButton"
+                      onClick={() =>
+                        setSection(
+                          "referral"
+                        )
+                      }
+                    >
+                      Open →
+                    </button>
+                  </div>
+
+                  {directUsers.length >
+                  0 ? (
+                    <div className="teamMiniList">
+                      {directUsers
+                        .slice(
+                          0,
+                          5
+                        )
+                        .map(
+                          (
+                            user
+                          ) => (
+                            <div
+                              className="teamMini"
+                              key={
+                                user.id
+                              }
+                            >
+                              <div className="avatar">
+                                {user.id}
+                              </div>
+
+                              <div>
+                                <strong>
+                                  User #
+                                  {
+                                    user.id
+                                  }
+                                </strong>
+
+                                <span>
+                                  {
+                                    shortAddress(
+                                      user.wallet
+                                    )
+                                  }
+                                </span>
+                              </div>
+
+                              <b>
+                                {statusLabel(
+                                  user.status
+                                )}
+                              </b>
+                            </div>
+                          )
+                        )}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="No direct users"
+                      description="The contract returned an empty direct-user list."
+                    />
+                  )}
+                </div>
+              </div>
+            </section>
           )}
-        />
 
-        <Row
-          label="Royalty"
-          value={royaltyLabel(
-            profile.royalty
+          {/* =================================================
+              EARNINGS
+          ================================================= */}
+          {section ===
+            "earnings" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="INCOME"
+                title="Earnings"
+                description="Lifetime income totals stored in your ORBI profile."
+              />
+
+              <div className="statsGrid">
+                <StatCard
+                  label="ROI Income"
+                  value={`$${formatUSDT(
+                    profile.totalROIIncome
+                  )}`}
+                />
+
+                <StatCard
+                  label="Level Income"
+                  value={`$${formatUSDT(
+                    profile.totalLevelIncome
+                  )}`}
+                />
+
+                <StatCard
+                  label="Rank Income"
+                  value={`$${formatUSDT(
+                    profile.totalRankIncome
+                  )}`}
+                />
+
+                <StatCard
+                  label="Royalty Income"
+                  value={`$${formatUSDT(
+                    profile.totalRoyaltyIncome
+                  )}`}
+                />
+              </div>
+
+              <div className="panel">
+                <div className="panelHeader">
+                  <div>
+                    <span className="panelEyebrow">
+                      LEVEL PLAN
+                    </span>
+
+                    <h3>
+                      Level Income
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="levelGrid">
+                  {LEVEL_PERCENTAGES.map(
+                    (
+                      percentage,
+                      index
+                    ) => (
+                      <div
+                        className="levelCard"
+                        key={
+                          index
+                        }
+                      >
+                        <span>
+                          Level{" "}
+                          {index + 1}
+                        </span>
+
+                        <strong>
+                          {percentage}%
+                        </strong>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panelHeader">
+                  <div>
+                    <span className="panelEyebrow">
+                      PACKAGE ROI
+                    </span>
+
+                    <h3>
+                      Package ROI Summary
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="businessRows">
+                  <div>
+                    <span>
+                      Package ROI Paid
+                    </span>
+
+                    <strong>
+                      $
+                      {formatUSDT(
+                        totalPackageROI
+                      )}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>
+                      Profile ROI Income
+                    </span>
+
+                    <strong>
+                      $
+                      {formatUSDT(
+                        profile.totalROIIncome
+                      )}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </section>
           )}
-        />
 
-        <Row
-          label="Lifetime Withdrawn"
-          value={`${money(
-            profile.totalWithdrawn
-          )} USDT`}
-        />
+          {/* =================================================
+              REFERRAL
+          ================================================= */}
+          {section ===
+            "referral" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="NETWORK"
+                title="Referral Center"
+                description="Direct users are loaded directly from the contract's referral storage."
+              />
 
-        <div className="actions">
-          <a
-            className="secondary"
-            href={addressUrl(
-              profile.wallet
-            )}
-            target="_blank"
-            rel="noreferrer"
-          >
-            View Wallet ↗
-          </a>
+              <div className="statsGrid">
+                <StatCard
+                  label="Direct Referrals"
+                  value={profile.directCount.toString()}
+                />
 
-          <a
-            className="secondary"
-            href={addressUrl(
-              CONTRACT_ADDRESS
-            )}
-            target="_blank"
-            rel="noreferrer"
-          >
-            View Contract ↗
-          </a>
-        </div>
-      </Card>
-    </>
-  );
-}
+                <StatCard
+                  label="Active Directs"
+                  value={profile.activeDirectCount.toString()}
+                />
 
-/* =========================================================
-   UI COMPONENTS
-========================================================= */
+                <StatCard
+                  label="Sponsor ID"
+                  value={`#${profile.sponsorId.toString()}`}
+                />
 
-function History({
-  title,
-  headers,
-  children,
-}: {
-  title: string;
-  headers: string[];
-  children: ReactNode;
-}) {
-  return (
-    <Card title={title}>
-      <div className="tableWrap">
-        <table>
-          <thead>
-            <tr>
-              {headers.map(
-                (header) => (
-                  <th
-                    key={
-                      header
+                <StatCard
+                  label="User ID"
+                  value={`#${profile.id.toString()}`}
+                />
+              </div>
+
+              <div className="panel">
+                <div className="panelHeader">
+                  <div>
+                    <span className="panelEyebrow">
+                      DIRECT TEAM
+                    </span>
+
+                    <h3>
+                      My Direct Referrals
+                    </h3>
+                  </div>
+
+                  <span>
+                    {directUsers.length} users
+                  </span>
+                </div>
+
+                {directUsers.length >
+                0 ? (
+                  <div className="tableWrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>
+                            User
+                          </th>
+
+                          <th>
+                            Wallet
+                          </th>
+
+                          <th>
+                            Status
+                          </th>
+
+                          <th>
+                            Business
+                          </th>
+
+                          <th>
+                            Directs
+                          </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {directUsers.map(
+                          (
+                            user
+                          ) => (
+                            <tr
+                              key={
+                                user.id
+                              }
+                            >
+                              <td>
+                                <strong>
+                                  #
+                                  {
+                                    user.id
+                                  }
+                                </strong>
+                              </td>
+
+                              <td>
+                                <code>
+                                  {
+                                    shortAddress(
+                                      user.wallet
+                                    )
+                                  }
+                                </code>
+                              </td>
+
+                              <td>
+                                <span
+                                  className={`statusText ${
+                                    user.status ===
+                                    UserStatus.ACTIVE
+                                      ? "greenText"
+                                      : ""
+                                  }`}
+                                >
+                                  {statusLabel(
+                                    user.status
+                                  )}
+                                </span>
+                              </td>
+
+                              <td>
+                                $
+                                {formatUSDT(
+                                  user.lifetimeBusiness
+                                )}
+                              </td>
+
+                              <td>
+                                {
+                                  user.directCount
+                                }
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No referrals found"
+                    description="getDirectUsers() returned no direct users."
+                  />
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* =================================================
+              WITHDRAWAL
+          ================================================= */}
+          {section ===
+            "withdrawal" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="WALLET"
+                title="Withdrawal"
+                description="Create a withdrawal request through the deployed ORBI contract."
+              />
+
+              <div className="walletGrid">
+                <div className="walletBalance">
+                  <span>
+                    Earning Wallet
+                  </span>
+
+                  <strong>
+                    $
+                    {formatUSDT(
+                      profile.earningWallet
+                    )}
+                  </strong>
+                </div>
+
+                <div className="walletBalance">
+                  <span>
+                    Rank Wallet
+                  </span>
+
+                  <strong>
+                    $
+                    {formatUSDT(
+                      profile.rankWallet
+                    )}
+                  </strong>
+                </div>
+
+                <div className="walletBalance">
+                  <span>
+                    Royalty Wallet
+                  </span>
+
+                  <strong>
+                    $
+                    {formatUSDT(
+                      profile.royaltyWallet
+                    )}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="withdrawGrid">
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        REQUEST
+                      </span>
+
+                      <h3>
+                        Withdraw USDT
+                      </h3>
+                    </div>
+                  </div>
+
+                  <label className="fieldLabel">
+                    Wallet Type
+                  </label>
+
+                  <select
+                    className="input"
+                    value={
+                      withdrawWallet
+                    }
+                    onChange={(e) =>
+                      setWithdrawWallet(
+                        Number(
+                          e.target.value
+                        ) as WalletType
+                      )
                     }
                   >
-                    {header}
-                  </th>
-                )
-              )}
-            </tr>
-          </thead>
+                    <option
+                      value={
+                        WalletType.EARNING
+                      }
+                    >
+                      Earning Wallet
+                    </option>
 
-          <tbody>
-            {children || (
-              <tr>
-                <td
-                  colSpan={
-                    headers.length
-                  }
-                >
-                  <Empty
-                    text="No records found in the scanned block range."
+                    <option
+                      value={
+                        WalletType.RANK
+                      }
+                    >
+                      Rank Wallet
+                    </option>
+
+                    <option
+                      value={
+                        WalletType.ROYALTY
+                      }
+                    >
+                      Royalty Wallet
+                    </option>
+                  </select>
+
+                  <label className="fieldLabel">
+                    Amount
+                  </label>
+
+                  <input
+                    className="input"
+                    value={
+                      withdrawAmount
+                    }
+                    onChange={(e) =>
+                      setWithdrawAmount(
+                        e.target.value
+                      )
+                    }
+                    placeholder="20"
+                    inputMode="decimal"
                   />
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
 
-function Page({
-  title,
-  sub,
-}: {
-  title: string;
-  sub: string;
-}) {
-  return (
-    <div className="pageHead">
-      <span className="eyebrow">
-        ORBIWORLD
-      </span>
+                  <button
+                    className="primaryButton"
+                    disabled={
+                      txBusy ||
+                      !withdrawAmount
+                    }
+                    onClick={
+                      withdraw
+                    }
+                  >
+                    {txBusy
+                      ? "Processing..."
+                      : "Request Withdrawal"}
+                  </button>
+                </div>
 
-      <h2>
-        {title}
-      </h2>
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        INFORMATION
+                      </span>
 
-      <p>
-        {sub}
-      </p>
-    </div>
-  );
-}
+                      <h3>
+                        Withdrawal Wallets
+                      </h3>
+                    </div>
+                  </div>
 
-function Card({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="card">
-      <div className="cardHead">
-        <h3>
-          {title}
-        </h3>
-      </div>
+                  <div className="businessRows">
+                    <div>
+                      <span>
+                        Earning
+                      </span>
 
-      {children}
-    </section>
-  );
-}
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.earningWallet
+                        )}
+                      </strong>
+                    </div>
 
-function Metric({
-  title,
-  value,
-  sub,
-}: {
-  title: string;
-  value: string;
-  sub: string;
-}) {
-  return (
-    <div className="metric">
-      <span>
-        {title}
-      </span>
+                    <div>
+                      <span>
+                        Rank
+                      </span>
 
-      <b>
-        {value}
-      </b>
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.rankWallet
+                        )}
+                      </strong>
+                    </div>
 
-      <small>
-        {sub}
-      </small>
-    </div>
-  );
-}
+                    <div>
+                      <span>
+                        Royalty
+                      </span>
 
-function Row({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="row">
-      <span>
-        {label}
-      </span>
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.royaltyWallet
+                        )}
+                      </strong>
+                    </div>
 
-      <b>
-        {value}
-      </b>
-    </div>
-  );
-}
+                    <div>
+                      <span>
+                        Total Withdrawn
+                      </span>
 
-function Progress({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  const safe =
-    Math.max(
-      0,
-      Math.min(
-        100,
-        value
-      )
-    );
-
-  return (
-    <div className="progress">
-      <div>
-        <span>
-          {label}
-        </span>
-
-        <b>
-          {Math.round(
-            safe
+                      <strong>
+                        $
+                        {formatUSDT(
+                          profile.totalWithdrawn
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           )}
-          %
-        </b>
+
+          {/* =================================================
+              PROFILE
+          ================================================= */}
+          {section ===
+            "profile" && (
+            <section className="content">
+              <SectionTitle
+                eyebrow="ACCOUNT"
+                title="My Profile"
+                description="Complete profile values read from the ORBI smart contract."
+              />
+
+              <div className="profileGrid">
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        IDENTITY
+                      </span>
+
+                      <h3>
+                        Account
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="profileSummary">
+                    <div>
+                      <span>
+                        User ID
+                      </span>
+
+                      <strong>
+                        #
+                        {profile.id.toString()}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Wallet
+                      </span>
+
+                      <strong className="addressValue">
+                        {shortAddress(
+                          profile.wallet
+                        )}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Sponsor ID
+                      </span>
+
+                      <strong>
+                        #
+                        {profile.sponsorId.toString()}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Status
+                      </span>
+
+                      <strong className="greenText">
+                        {statusLabel(
+                          profile.status
+                        )}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Rank
+                      </span>
+
+                      <strong>
+                        R{profile.rank}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>
+                        Royalty
+                      </span>
+
+                      <strong>
+                        {profile.royalty}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel">
+                  <div className="panelHeader">
+                    <div>
+                      <span className="panelEyebrow">
+                        CONTRACT
+                      </span>
+
+                      <h3>
+                        Deployed Contract
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="contractInfo">
+                    <span>
+                      ORBIWorld
+                    </span>
+
+                    <code>
+                      {
+                        CONTRACT_ADDRESS
+                      }
+                    </code>
+
+                    <a
+                      href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open on BscScan ↗
+                    </a>
+
+                    <span>
+                      USDT
+                    </span>
+
+                    <code>
+                      {
+                        USDT_ADDRESS
+                      }
+                    </code>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* =================================================
+              STAKE ACTION
+          ================================================= */}
+          {(section ===
+            "overview" ||
+            section ===
+              "packages") && (
+            <section className="content">
+              <div className="panel stakePanel">
+                <div className="panelHeader">
+                  <div>
+                    <span className="panelEyebrow">
+                      STAKING
+                    </span>
+
+                    <h3>
+                      {profile.status ===
+                      UserStatus.ACTIVE
+                        ? "Create New Package"
+                        : "Activate Account"}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="stakeForm">
+                  <div>
+                    <label className="fieldLabel">
+                      USDT Amount
+                    </label>
+
+                    <input
+                      className="input"
+                      value={
+                        stakeAmount
+                      }
+                      onChange={(e) =>
+                        setStakeAmount(
+                          e.target.value
+                        )
+                      }
+                      placeholder="50"
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <button
+                    className="primaryButton"
+                    disabled={
+                      txBusy ||
+                      !stakeAmount
+                    }
+                    onClick={
+                      profile.status ===
+                      UserStatus.ACTIVE
+                        ? topUp
+                        : activate
+                    }
+                  >
+                    {txBusy
+                      ? "Processing..."
+                      : profile.status ===
+                        UserStatus.ACTIVE
+                      ? "Top Up"
+                      : "Activate Account"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          <footer className="footer">
+            <span>
+              ORBIWORLD
+            </span>
+
+            <span>
+              Contract-powered dashboard
+            </span>
+
+            <a
+              href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Contract ↗
+            </a>
+          </footer>
+        </main>
       </div>
-
-      <i
-        style={{
-          width: `${safe}%`,
-        }}
-      />
-    </div>
-  );
-}
-
-function Pill({
-  value,
-}: {
-  value: string;
-}) {
-  const type =
-    value ===
-      "APPROVED" ||
-    value ===
-      "ACTIVE" ||
-    value ===
-      "ACHIEVED"
-      ? "green"
-      : value ===
-          "REJECTED" ||
-        value ===
-          "CLOSED"
-      ? "red"
-      : "yellow";
-
-  return (
-    <span
-      className={`pill ${type}`}
-    >
-      {value}
-    </span>
-  );
-}
-
-function Empty({
-  text,
-}: {
-  text: string;
-}) {
-  return (
-    <div className="empty">
-      {text}
-    </div>
+    </>
   );
 }
 
 /* =========================================================
-   STYLES
+   CSS
 ========================================================= */
 
-const styles = `
-*{
-  box-sizing:border-box;
+const GLOBAL_CSS = `
+* {
+  box-sizing: border-box;
 }
 
-body{
-  margin:0;
-  background:#050914;
-  color:#eef2ff;
-  font-family:Inter,Arial,sans-serif;
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #eef2ff;
+  color: #111827;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 button,
 input,
-select{
-  font:inherit;
+select {
+  font: inherit;
 }
 
-.shell{
-  min-height:100vh;
-  display:flex;
-  background:#050914;
-}
-
-.sidebar{
-  width:270px;
-  flex:none;
-  border-right:1px solid #182235;
-  background:#070c16;
-  padding:26px 18px;
-  display:flex;
-  flex-direction:column;
-  position:fixed;
-  inset:0 auto 0 0;
-  z-index:20;
-}
-
-.brand{
-  display:flex;
-  gap:12px;
-  align-items:center;
-  padding:5px 10px 28px;
-  border-bottom:1px solid #172033;
+button {
+  cursor: pointer;
 }
 
-.brand img{
-  width:38px;
-  height:38px;
-  object-fit:contain;
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
 }
 
-.brand b{
-  display:block;
-  letter-spacing:3px;
-  font-size:17px;
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
-.brand small{
-  display:block;
-  color:#71809a;
-  font-size:9px;
-  letter-spacing:2px;
-  margin-top:4px;
+.appShell {
+  min-height: 100vh;
+  display: flex;
+  background: #eef2ff;
 }
 
-.navTitle{
-  font-size:10px;
-  letter-spacing:2px;
-  color:#52627d;
-  font-weight:800;
-  padding:26px 12px 9px;
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 250px;
+  padding: 24px 16px;
+  background: #111827;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
 }
 
-.navBtn,
-.navGroupButton{
-  width:100%;
-  border:0;
-  background:transparent;
-  color:#91a0b8;
-  padding:12px;
-  border-radius:11px;
-  display:flex;
-  align-items:center;
-  gap:12px;
-  text-align:left;
-  cursor:pointer;
-  margin:2px 0;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 5px 10px 24px;
 }
 
-.navBtn:hover,
-.navGroupButton:hover,
-.navBtn.active{
-  background:#101a2c;
-  color:#fff;
+.brand img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
 }
 
-.navBtn.active{
-  box-shadow:
-    inset 0 0 0 1px #263b5d;
+.brand strong {
+  display: block;
+  font-size: 20px;
+  letter-spacing: .08em;
 }
 
-.navIcon{
-  width:18px;
-  text-align:center;
-  color:#60a5fa;
+.brand span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .25em;
+  opacity: .6;
 }
 
-.navGroupButton{
-  justify-content:space-between;
-  color:#52627d;
-  font-size:10px;
-  letter-spacing:2px;
-  font-weight:800;
-  margin-top:12px;
+.walletMini {
+  margin: 0 4px 22px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 12px;
+  background: rgba(255,255,255,.04);
 }
 
-.sideLink{
-  margin-top:auto;
-  color:#6fa9ff;
-  text-decoration:none;
-  font-size:13px;
-  padding:12px;
+.walletMini span {
+  display: block;
+  font-size: 9px;
+  letter-spacing: .16em;
+  opacity: .55;
+  margin-bottom: 5px;
 }
 
-.main{
-  margin-left:270px;
-  width:calc(100% - 270px);
-  padding:30px 34px 60px;
+.walletMini code {
+  font-size: 12px;
+  color: #d1d5db;
 }
 
-.topbar{
-  display:flex;
-  justify-content:space-between;
-  gap:20px;
-  align-items:center;
-  margin-bottom:24px;
+.nav {
+  display: grid;
+  gap: 5px;
 }
 
-.topbar h1{
-  margin:5px 0 4px;
-  font-size:28px;
+.navButton {
+  border: 0;
+  background: transparent;
+  color: #9ca3af;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 10px;
+  text-align: left;
+  transition: .15s ease;
 }
 
-.topbar p,
-.pageHead p{
-  margin:0;
-  color:#71809a;
+.navButton:hover,
+.navButton.selected {
+  background: rgba(255,255,255,.08);
+  color: white;
 }
 
-.eyebrow{
-  font-size:10px;
-  letter-spacing:2px;
-  color:#6d7f9d;
-  font-weight:800;
+.navButton.selected {
+  box-shadow: inset 3px 0 0 #22c55e;
 }
 
-.walletActions{
-  display:flex;
-  align-items:center;
-  gap:9px;
+.navIcon {
+  width: 22px;
+  text-align: center;
+  font-weight: 700;
 }
 
-.walletChip{
-  border:1px solid #263a59;
-  background:#0c1422;
-  border-radius:12px;
-  padding:11px 14px;
-  display:flex;
-  gap:9px;
-  align-items:center;
+.sidebarBottom {
+  margin-top: auto;
 }
 
-.walletChip i{
-  width:8px;
-  height:8px;
-  border-radius:50%;
-  background:#38d39f;
+.contractLink {
+  display: block;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #9ca3af;
 }
 
-.primary,
-.secondary,
-.danger{
-  border-radius:10px;
-  padding:12px 16px;
-  cursor:pointer;
-  font-weight:700;
+.networkPill {
+  margin-top: 5px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(34,197,94,.08);
+  color: #86efac;
+  font-size: 11px;
 }
 
-.primary{
-  background:#2563eb;
-  color:#fff;
-  border:0;
+.main {
+  width: calc(100% - 250px);
+  margin-left: 250px;
+  min-height: 100vh;
 }
 
-.secondary{
-  background:#101827;
-  color:#e8eefb;
-  border:1px solid #2a3b56;
+.header {
+  min-height: 86px;
+  padding: 18px 32px;
+  background: rgba(255,255,255,.88);
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  backdrop-filter: blur(14px);
 }
 
-.danger{
-  background:#7f1d1d;
-  color:#fff;
-  border:0;
+.headerEyebrow,
+.eyebrow,
+.panelEyebrow {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .17em;
+  font-weight: 800;
+  color: #6b7280;
 }
 
-.primary:disabled,
-.secondary:disabled,
-.danger:disabled{
-  opacity:.5;
-  cursor:not-allowed;
+.header h1 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  line-height: 1.2;
 }
 
-.notice,
-.error{
-  padding:13px 16px;
-  border-radius:12px;
-  margin-bottom:18px;
-  border:1px solid;
+.headerActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.notice{
-  background:#082d47;
-  border-color:#0b587c;
-  color:#9edcff;
+.refreshButton,
+.textButton {
+  border: 0;
+  background: transparent;
+  color: #374151;
+  font-weight: 700;
 }
 
-.error{
-  background:#35121a;
-  border-color:#6e2535;
-  color:#ffb6c2;
-  display:flex;
-  justify-content:space-between;
-  gap:15px;
+.refreshButton:hover,
+.textButton:hover {
+  color: #16a34a;
 }
 
-.error button{
-  background:none;
-  border:0;
-  color:inherit;
-  cursor:pointer;
+.accountChip {
+  padding: 9px 12px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  font-family: monospace;
+  font-size: 12px;
 }
 
-.content{
-  max-width:1250px;
+.onlineDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-right: 7px;
 }
 
-.pageHead{
-  margin:8px 0 22px;
+.menuButton {
+  display: none;
+  border: 0;
+  background: transparent;
+  font-size: 23px;
 }
 
-.pageHead h2{
-  margin:5px 0;
-  font-size:24px;
+.content {
+  padding: 32px;
+  max-width: 1500px;
+  margin: auto;
 }
 
-.grid{
-  display:grid;
-  gap:16px;
-  margin-bottom:18px;
+.sectionTitle {
+  margin-bottom: 24px;
 }
 
-.grid.four{
-  grid-template-columns:repeat(4,1fr);
+.sectionTitle h2 {
+  margin: 5px 0 6px;
+  font-size: 28px;
 }
 
-.grid.three{
-  grid-template-columns:repeat(3,1fr);
+.sectionTitle p {
+  margin: 0;
+  color: #6b7280;
+  max-width: 720px;
+  line-height: 1.6;
 }
 
-.two{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:16px;
-  margin-bottom:18px;
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
 }
 
-.metric,
-.card,
-.welcome,
-.registrationCard{
-  background:#09111f;
-  border:1px solid #18263c;
-  border-radius:16px;
+.statCard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 19px;
+  box-shadow: 0 5px 18px rgba(15,23,42,.04);
 }
 
-.metric{
-  padding:20px;
+.statLabel {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.metric span,
-.metric small{
-  display:block;
-  color:#71809a;
+.statValue {
+  margin-top: 9px;
+  font-size: 24px;
+  font-weight: 800;
+  word-break: break-word;
 }
 
-.metric b{
-  display:block;
-  font-size:25px;
-  margin:9px 0;
+.statSub {
+  margin-top: 5px;
+  color: #9ca3af;
+  font-size: 11px;
 }
 
-.metric small{
-  font-size:11px;
+.overviewGrid,
+.businessGrid,
+.withdrawGrid,
+.profileGrid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 
-.card{
-  padding:22px;
-  margin-bottom:18px;
+.panel {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 5px 18px rgba(15,23,42,.04);
+  margin-bottom: 18px;
 }
 
-.cardHead{
-  margin-bottom:18px;
+.panelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 20px;
 }
 
-.cardHead h3{
-  margin:0;
-  font-size:17px;
+.panelHeader h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
 }
 
-.row{
-  display:flex;
-  justify-content:space-between;
-  gap:20px;
-  padding:13px 0;
-  border-bottom:1px solid #142033;
+.profileSummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: #e5e7eb;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+  border-radius: 13px;
 }
 
-.row:last-child{
-  border-bottom:0;
+.profileSummary > div {
+  background: white;
+  padding: 14px;
 }
 
-.row span{
-  color:#73839c;
+.profileSummary span {
+  display: block;
+  color: #6b7280;
+  font-size: 11px;
+  margin-bottom: 5px;
 }
 
-.row b{
-  font-weight:650;
-  text-align:right;
-  word-break:break-word;
+.profileSummary strong {
+  font-size: 14px;
 }
 
-.welcome{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:24px;
-  margin-bottom:18px;
-  background:
-    linear-gradient(
-      120deg,
-      #0b1b2d,
-      #09111f
-    );
+.greenText {
+  color: #16a34a !important;
 }
 
-.welcome h2{
-  margin:7px 0;
+.packageCard {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px;
 }
 
-.welcome p{
-  margin:0;
-  color:#7e8da5;
+.packageTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
 }
 
-.walletBalance{
-  text-align:right;
+.packageLabel {
+  color: #6b7280;
+  font-size: 9px;
+  letter-spacing: .14em;
+  font-weight: 800;
 }
 
-.walletBalance small{
-  display:block;
-  color:#70819b;
+.packageTop h3 {
+  margin: 4px 0 0;
 }
 
-.walletBalance b{
-  font-size:28px;
+.statusBadge {
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 9px;
+  font-weight: 800;
 }
 
-.full{
-  width:100%;
-  margin-top:14px;
+.statusBadge.active {
+  background: #dcfce7;
+  color: #15803d;
 }
 
-.formGrid{
-  display:grid;
-  grid-template-columns:1.3fr 1fr 1fr;
-  gap:10px;
+.statusBadge.closed {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
-.formGrid input,
-.formGrid select,
-.refBox input{
-  width:100%;
-  background:#050a13;
-  color:#fff;
-  border:1px solid #25364f;
-  border-radius:10px;
-  padding:13px 14px;
-  outline:none;
+.packageAmount {
+  margin: 20px 0;
+  font-size: 31px;
+  font-weight: 900;
 }
 
-.formGrid input:focus,
-.formGrid select:focus,
-.refBox input:focus{
-  border-color:#3b82f6;
+.packageGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
 }
 
-.muted{
-  color:#71809a;
+.packageGrid div {
+  padding: 11px;
+  border-radius: 10px;
+  background: white;
+  border: 1px solid #e5e7eb;
 }
 
-.tableWrap{
-  overflow:auto;
+.packageGrid span {
+  display: block;
+  font-size: 10px;
+  color: #6b7280;
+  margin-bottom: 4px;
 }
 
-.tableWrap table{
-  width:100%;
-  border-collapse:collapse;
-  min-width:650px;
+.packageGrid strong {
+  font-size: 12px;
 }
 
-.tableWrap th,
-.tableWrap td{
-  text-align:left;
-  padding:13px 12px;
-  border-bottom:1px solid #142033;
-  font-size:13px;
+.progressBlock {
+  margin-top: 18px;
 }
 
-.tableWrap th{
-  color:#667894;
-  font-size:10px;
-  letter-spacing:1px;
-  text-transform:uppercase;
+.progressHeader {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7280;
+  font-size: 11px;
+  margin-bottom: 7px;
 }
 
-.tableWrap a{
-  color:#69a8ff;
-  text-decoration:none;
+.progressTrack {
+  height: 7px;
+  background: #e5e7eb;
+  border-radius: 99px;
+  overflow: hidden;
 }
 
-.pill{
-  display:inline-block;
-  padding:5px 9px;
-  border-radius:999px;
-  background:#4a3b14;
-  color:#f7d879;
-  font-size:10px;
-  font-weight:800;
+.progressFill {
+  height: 100%;
+  background: #22c55e;
+  border-radius: inherit;
 }
 
-.pill.green{
-  background:#0d3c2c;
-  color:#67e8b1;
+.packageFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+  font-size: 10px;
+  color: #6b7280;
 }
 
-.pill.red{
-  background:#451923;
-  color:#ff98a9;
+.packageList {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 28px;
 }
 
-.rankGrid{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:16px;
-  margin-bottom:18px;
+.packageToolbar {
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 13px;
+  margin-bottom: 14px;
 }
-.levelTable{
-  width:100%;
-}
 
-.levelTableHead,
-.levelTableRow{
-  display:grid;
-  grid-template-columns:1fr 1fr 1fr;
-  align-items:center;
-  column-gap:20px;
+.packageToolbar div {
+  display: flex;
+  justify-content: space-between;
 }
 
-.levelTableHead{
-  padding:12px 14px;
-  background:#101b2d;
-  border-radius:10px 10px 0 0;
-  color:#6fa9ff;
-  font-size:10px;
-  font-weight:800;
-  letter-spacing:1px;
-  text-transform:uppercase;
+.packageToolbar span {
+  color: #6b7280;
+  font-size: 12px;
 }
 
-.levelTableRow{
-  padding:15px 14px;
-  border-bottom:1px solid #142033;
-  color:#dce5f5;
-  font-size:14px;
+.historyHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 30px 0 14px;
 }
 
-.levelTableRow:last-child{
-  border-bottom:0;
+.historyHeading h3 {
+  margin: 0;
 }
 
-.levelTableRow>span:nth-child(2){
-  font-weight:700;
+.historyHeading span {
+  color: #6b7280;
+  font-size: 12px;
 }
 
-.levelStatus{
-  display:inline-flex;
-  width:max-content;
-  min-width:78px;
-  justify-content:center;
-  padding:6px 11px;
-  border-radius:999px;
-  font-size:10px;
-  font-weight:800;
-  letter-spacing:.08em;
+.businessRows {
+  display: grid;
+  gap: 1px;
+  background: #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
-.levelStatus.open{
-  background:#0b2a20;
-  border:1px solid #174d3a;
-  color:#4ade80;
+.businessRows > div {
+  background: white;
+  padding: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
 }
 
-.levelStatus.pending{
-  background:#251f0d;
-  border:1px solid #4a3b14;
-  color:#f7d879;
+.businessRows span {
+  color: #6b7280;
+  font-size: 12px;
 }
-
-@media(max-width:600px){
-
-  .levelTableHead,
-  .levelTableRow{
-    grid-template-columns:1fr .8fr 1.2fr;
-    column-gap:10px;
-  }
 
-  .levelTableHead,
-  .levelTableRow{
-    padding-left:10px;
-    padding-right:10px;
-  }
-
-}
-.rankReward{
-  font-size:24px;
-  font-weight:800;
-  margin-bottom:5px;
+.teamMiniList {
+  display: grid;
+  gap: 8px;
 }
 
-.progress{
-  margin:14px 0;
+.teamMini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #e5e7eb;
+  border-radius: 11px;
 }
 
-.progress>div{
-  display:flex;
-  justify-content:space-between;
-  color:#7c8da7;
-  font-size:11px;
-  margin-bottom:6px;
+.teamMini > div:nth-child(2) {
+  flex: 1;
 }
 
-.progress i{
-  display:block;
-  height:7px;
-  border-radius:99px;
-  background:#2563eb;
-  max-width:100%;
+.teamMini strong,
+.teamMini span {
+  display: block;
 }
 
-.refBox{
-  display:grid;
-  grid-template-columns:1fr auto;
-  gap:10px;
-  margin-bottom:18px;
+.teamMini strong {
+  font-size: 12px;
 }
 
-.steps{
-  margin:0;
-  padding-left:20px;
-  color:#9ba9bf;
+.teamMini span {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #6b7280;
 }
 
-.steps li{
-  padding:7px;
+.teamMini b {
+  font-size: 9px;
+  color: #16a34a;
 }
 
-.teamRow{
-  display:flex;
-  justify-content:space-between;
-  gap:20px;
-  padding:14px 0;
-  border-bottom:1px solid #142033;
+.avatar {
+  width: 31px;
+  height: 31px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 9px;
+  font-weight: 800;
 }
 
-.teamRow>div{
-  display:flex;
-  gap:10px;
-  align-items:center;
+.levelGrid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
 }
 
-.teamRow span,
-.teamRow small{
-  color:#71809a;
+.levelCard {
+  padding: 15px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f8fafc;
 }
 
-.teamRow small{
-  display:block;
+.levelCard span {
+  display: block;
+  color: #6b7280;
+  font-size: 10px;
 }
 
-.fee{
-  display:flex;
-  justify-content:space-between;
-  gap:10px;
-  flex-wrap:wrap;
-  margin-top:16px;
-  padding:14px;
-  background:#070d17;
-  border-radius:10px;
-  color:#71809a;
+.levelCard strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
 }
 
-.fee b{
-  color:#fff;
+.walletGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
 }
 
-.dangerBox{
-  padding:18px;
-  border:1px solid #6b2731;
-  background:#241017;
-  border-radius:12px;
+.walletBalance {
+  padding: 20px;
+  border-radius: 15px;
+  background: white;
+  border: 1px solid #e5e7eb;
 }
 
-.dangerBox p{
-  color:#c08d96;
-  line-height:1.6;
+.walletBalance span {
+  display: block;
+  color: #6b7280;
+  font-size: 11px;
 }
 
-.registrationCard{
-  max-width:700px;
-  margin:80px auto;
-  padding:42px;
-  text-align:center;
+.walletBalance strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 24px;
 }
 
-.registrationIcon{
-  font-size:34px;
-  color:#60a5fa;
+.fieldLabel {
+  display: block;
+  margin: 13px 0 7px;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.registrationCard h2{
-  font-size:28px;
-  margin:10px 0;
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: white;
+  outline: none;
 }
 
-.registrationCard p{
-  color:#7787a0;
-  line-height:1.7;
+.input:focus {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34,197,94,.1);
 }
 
-.refExplain{
-  margin:20px 0;
-  padding:15px;
-  border:1px solid #1b2a40;
-  background:#070d17;
-  border-radius:12px;
+.primaryButton {
+  width: 100%;
+  min-height: 45px;
+  border: 0;
+  border-radius: 10px;
+  background: #16a34a;
+  color: white;
+  font-weight: 800;
+  margin-top: 15px;
 }
 
-.refExplain b{
-  display:block;
-  color:#71809a;
-  margin-bottom:8px;
+.primaryButton:hover {
+  background: #15803d;
 }
 
-.refExplain code{
-  color:#dce7f7;
+.stakeForm {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  align-items: end;
+  gap: 12px;
 }
 
-.registrationCard small{
-  display:block;
-  color:#667893;
-  margin-top:12px;
+.stakeForm .primaryButton {
+  margin-top: 0;
 }
 
-.login{
-  min-height:100vh;
-  width:100%;
-  display:grid;
-  place-items:center;
-  padding:20px;
+.contractInfo {
+  display: grid;
+  gap: 10px;
 }
 
-.loginCard{
-  max-width:520px;
-  text-align:center;
-  background:#09111f;
-  border:1px solid #1c2b42;
-  border-radius:22px;
-  padding:48px;
+.contractInfo code {
+  padding: 11px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  word-break: break-all;
+  font-size: 11px;
 }
 
-.loginCard img{
-  width:70px;
-  height:70px;
-  object-fit:contain;
+.contractInfo a {
+  color: #16a34a;
+  font-weight: 700;
+  font-size: 12px;
 }
 
-.loginCard h1{
-  font-size:30px;
-  margin:14px 0 8px;
+.tableWrap {
+  overflow-x: auto;
 }
 
-.loginCard p{
-  color:#7a8aa3;
-  line-height:1.7;
+table {
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.loginCard .primary{
-  width:100%;
-  margin-top:18px;
+th,
+td {
+  text-align: left;
+  padding: 13px 10px;
+  border-bottom: 1px solid #eef2f7;
+  white-space: nowrap;
 }
 
-.loginCard small{
-  display:block;
-  color:#596b86;
-  margin-top:14px;
+th {
+  color: #6b7280;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
 }
 
-.actions{
-  display:flex;
-  gap:10px;
-  margin-top:18px;
+td {
+  font-size: 12px;
 }
 
-.actions a{
-  text-decoration:none;
+td code {
+  font-size: 11px;
 }
 
-.mobileMenu,
-.mobileClose{
-  display:none;
+.statusText {
+  font-size: 10px;
+  font-weight: 800;
 }
 
-.empty{
-  padding:30px;
-  text-align:center;
-  color:#667894;
+.noticeWrap {
+  padding: 16px 32px 0;
 }
 
-code{
-  color:#8fc5ff;
+.errorBox,
+.infoBox {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
 }
-
-@media(max-width:1100px){
-
-  .grid.four{
-    grid-template-columns:repeat(2,1fr);
-  }
 
-  .rankGrid{
-    grid-template-columns:repeat(2,1fr);
-  }
-
-  .formGrid{
-    grid-template-columns:1fr;
-  }
-
-  .walletActions{
-    flex-wrap:wrap;
-    justify-content:flex-end;
-  }
+.errorBox {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
 }
-
-@media(max-width:780px){
-
-  .sidebar{
-    transform:translateX(-100%);
-    transition:.2s;
-  }
-
-  .sidebar.open{
-    transform:translateX(0);
-  }
-
-  .mobileClose{
-    display:block;
-    position:absolute;
-    right:12px;
-    top:10px;
-    background:none;
-    border:0;
-    color:#fff;
-    font-size:28px;
-  }
-
-  .main{
-    margin-left:0;
-    width:100%;
-    padding:20px;
-  }
 
-  .mobileMenu{
-    display:block;
-    background:#101827;
-    color:#fff;
-    border:1px solid #263852;
-    border-radius:9px;
-    padding:8px 11px;
-  }
-
-  .topbar{
-    align-items:flex-start;
-    flex-wrap:wrap;
-  }
-
-  .walletActions{
-    width:100%;
-    justify-content:flex-start;
-  }
-
-  .walletChip{
-    flex:1;
-  }
-
-  .two,
-  .grid.three,
-  .grid.four,
-  .rankGrid{
-    grid-template-columns:1fr;
-  }
-    /* =========================================================
-   LEVEL INCOME
-========================================================= */
-
-.levelInfo{
-
-  display:flex;
-
-  flex-direction:column;
-
+.infoBox {
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  color: #166534;
 }
-
-.levelInfoRow{
-
-  display:flex;
-
-  justify-content:space-between;
-
-  align-items:center;
-
-  gap:20px;
-
-  padding:18px 0;
-
-  border-bottom:1px solid #142033;
 
+.emptyState {
+  padding: 38px 20px;
+  text-align: center;
+  border: 1px dashed #d1d5db;
+  border-radius: 14px;
+  background: #f8fafc;
 }
 
-.levelInfoRow:last-child{
-
-  border-bottom:0;
-
+.emptyIcon {
+  font-size: 28px;
+  color: #9ca3af;
 }
-
-.levelInfoRow > div{
 
-  display:flex;
-
-  flex-direction:column;
-
-  gap:5px;
-
+.emptyState h3 {
+  margin: 10px 0 5px;
 }
-
-.levelInfoRow strong{
 
-  color:#e7edf7;
-
-  font-size:15px;
-
+.emptyState p {
+  margin: 0 auto;
+  max-width: 500px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
 }
-
-.levelInfoRow small{
-
-  color:#71809a;
 
-  font-size:12px;
-
+.loginPage,
+.loadingPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #eef2ff;
 }
-
-.levelInfoRow > span{
-
-  color:#e7edf7;
-
-  font-weight:700;
 
-  text-align:right;
-
+.loginCard {
+  width: min(430px, 100%);
+  padding: 34px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(15,23,42,.08);
 }
-
-.statusBadge{
-
-  display:inline-flex;
-
-  align-items:center;
-
-  padding:6px 10px;
-
-  border-radius:999px;
-
-  background:#0b2a20;
 
-  border:1px solid #174d3a;
+.logoBox {
+  width: 60px;
+  height: 60px;
+  margin-bottom: 20px;
+}
 
-  color:#4ade80 !important;
+.logoBox img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 
-  font-size:11px;
+.loginCard h1 {
+  margin: 7px 0 10px;
+  font-size: 29px;
+}
 
-  letter-spacing:.08em;
+.loginCard p {
+  color: #6b7280;
+  line-height: 1.65;
+  font-size: 13px;
+}
 
+.networkText {
+  text-align: center;
+  margin-top: 14px;
+  color: #9ca3af;
+  font-size: 10px;
 }
 
-  .welcome{
-    display:block;
-  }
+.walletPreview {
+  margin: 15px 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  font-family: monospace;
+  font-size: 12px;
+  text-align: center;
+}
 
-  .walletBalance{
-    text-align:left;
-    margin-top:20px;
-  }
+.fieldHint {
+  margin-top: 6px;
+  color: #9ca3af;
+  font-size: 10px;
+}
 
-  .refBox{
-    grid-template-columns:1fr;
-  }
+.loader {
+  width: 35px;
+  height: 35px;
+  border: 3px solid #d1d5db;
+  border-top-color: #16a34a;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
 
-  .registrationCard{
-    margin:30px auto;
-    padding:28px;
-  }
+.loadingPage {
+  gap: 12px;
+  color: #6b7280;
+}
 
-  .actions{
-    flex-direction:column;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
-  `;
+
+.footer {
+  padding: 25px 32px 35px;
+  color: #9ca3af;
+  font-size: 10px;
+  display: flex;
+  gap: 15px;
+}
+
+.footer a {
+  color: #16a34a;
+}
+
+.mobileOverlay {
+  display: none;
+}
+
+@media (max-width: 1050px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .overviewGrid,
+  .businessGrid,
+  .withdrawGrid,
+  .profileGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .packageGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .levelGrid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+@media (max-width: 780px) {
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+  }
+
+  .sidebar.sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .mobileOverlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.35);
+    z-index: 40;
+  }
+
+  .main {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .menuButton {
+    display: block;
+  }
+
+  .header {
+    padding: 15px 18px;
+  }
+
+  .headerActions {
+    gap: 5px;
+  }
+
+  .refreshButton {
+    display: none;
+  }
+
+  .accountChip {
+    font-size: 10px;
+  }
+
+  .content {
+    padding: 20px 15px;
+  }
+
+  .noticeWrap {
+    padding: 12px 15px 0;
+  }
+
+  .sectionTitle h2 {
+    font-size: 23px;
+  }
+
+  .statsGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .walletGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .stakeForm {
+    grid-template-columns: 1fr;
+  }
+
+  .levelGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .footer {
+    padding: 20px 15px;
+  }
+}
+
+@media (max-width: 500px) {
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .packageGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .packageAmount {
+    font-size: 27px;
+  }
+
+  .profileSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .header h1 {
+    font-size: 17px;
+  }
+
+  .headerEyebrow {
+    font-size: 8px;
+  }
+
+  .loginCard {
+    padding: 25px 20px;
+  }
+}
+`;

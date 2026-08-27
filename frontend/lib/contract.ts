@@ -1,5 +1,9 @@
 import { ethers } from "ethers";
 
+/* =========================================================
+   GLOBAL WINDOW
+========================================================= */
+
 declare global {
   interface Window {
     ethereum?: any;
@@ -7,8 +11,20 @@ declare global {
 }
 
 /* =========================================================
-   ORBIWORLD — CONTRACT CONFIG
-   ========================================================= */
+   NETWORK
+========================================================= */
+
+export const BSC_TESTNET = {
+  chainId: 97,
+  chainHex: "0x61",
+  name: "BSC Testnet",
+  rpcUrl: "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
+  explorer: "https://testnet.bscscan.com",
+} as const;
+
+/* =========================================================
+   DEPLOYED CONTRACTS
+========================================================= */
 
 export const CONTRACT_ADDRESS =
   "0x8c8AbFA4d9CBBCb3420Dc870bCb3B23dbDa3fe61";
@@ -16,49 +32,45 @@ export const CONTRACT_ADDRESS =
 export const USDT_ADDRESS =
   "0x855c91cF87745e01e370B671f0Da25dcC7685394";
 
-export const BSC_TESTNET = {
-  chainId: 97,
-  chainHex: "0x61",
-  name: "BSC Testnet",
-  rpcUrl: "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
-  historyRpcUrl: "https://bsc-testnet-rpc.publicnode.com",
-  explorer: "https://testnet.bscscan.com",
-};
-
 /* =========================================================
-   CONTRACT CONSTANTS
+   TOKEN / PLATFORM CONSTANTS
 ========================================================= */
 
 export const USDT_DECIMALS = 18;
+
 export const MAX_PACKAGE_MULTIPLIER = 2;
+
 export const DEFAULT_DAILY_ROI_BPS = 50;
+
 export const DEFAULT_MIN_STAKE = 50;
+
 export const DEFAULT_MIN_TOPUP = 50;
+
 export const DEFAULT_MIN_WITHDRAWAL = 20;
+
 export const DEFAULT_WITHDRAWAL_FEE_BPS = 1000;
 
 /* =========================================================
-   LEVEL INCOME CONFIG
+   LEVEL INCOME
    Fresh deployed contract:
    10%, 5%, 3%, 2%, 1%, 1%, 1%, 1%, 1%, 1%
 ========================================================= */
 
 export const LEVEL_INCOME_BPS = [
-  1000, // L1 = 10%
-  500,  // L2 = 5%
-  300,  // L3 = 3%
-  200,  // L4 = 2%
-  100,  // L5 = 1%
-  100,  // L6 = 1%
-  100,  // L7 = 1%
-  100,  // L8 = 1%
-  100,  // L9 = 1%
-  100,  // L10 = 1%
+  1000,
+  500,
+  300,
+  200,
+  100,
+  100,
+  100,
+  100,
+  100,
+  100,
 ] as const;
 
 /* =========================================================
-   COMMON USER TUPLE
-   Matches ORBIWorld.User exactly.
+   USER TUPLE
 ========================================================= */
 
 const USER_TUPLE =
@@ -86,95 +98,98 @@ const USER_TUPLE =
   "uint8 royalty)";
 
 /* =========================================================
-   ORBI CONTRACT ABI
+   ORBIWORLD ABI
+   Only functions required by the new frontend.
 ========================================================= */
 
 export const ORBI_ABI = [
-  /* USER / STAKING */
-  "function activateAccount(uint256 amount)",
-  "function topUp(uint256 amount)",
+  /* ---------------- REGISTRATION / STAKING ---------------- */
+
   "function registerOnly(address sponsorWallet)",
 
-  /* WITHDRAWAL */
+  "function activateAccount(uint256 amount)",
+
+  "function topUp(uint256 amount)",
+
+  /* ---------------- WITHDRAWAL ---------------- */
+
   "function requestWithdraw(uint8 walletType,uint256 amount)",
 
-  /* EMERGENCY CAPITAL */
   "function emergencyCapitalWithdraw()",
 
-  /* USER DATA */
+  /* ---------------- USER ---------------- */
+
   `function myProfile() view returns (${USER_TUPLE})`,
+
   `function getUser(uint256 userId) view returns (${USER_TUPLE})`,
+
   "function getUserId(address wallet) view returns (uint256)",
+
   "function getSponsor(uint256 userId) view returns (uint256)",
+
   "function getWallet(uint256 userId) view returns (address)",
+
   "function getUserStatus(uint256 userId) view returns (uint8)",
+
   "function isRegistered(address wallet) view returns (bool)",
 
-  /* FRONTEND READ HELPERS */
+  /* ---------------- DASHBOARD HELPERS ---------------- */
+
   `function getDashboardData(uint256 userId) view returns (${USER_TUPLE} user,uint256[] packageIds,uint256[] activePackageIds,uint256[] directReferralIds)`,
+
   "function getBusinessStats(uint256 userId) view returns (uint256 lifetimeBusiness,uint256 monthlyBusiness,uint256 todayBusiness,uint256 powerLegBusiness,uint256 otherLegBusiness,uint256 directCount,uint256 activeDirectCount)",
+
   "function getDirectReferrals(uint256 userId) view returns (uint256[] memory)",
+
   "function getDirectLegBusiness(uint256 sponsorId,uint256 directUserId) view returns (uint256)",
+
   `function getDirectUsers(uint256 userId) view returns (${USER_TUPLE}[] users)`,
+
+  /* ---------------- PACKAGE HELPERS ---------------- */
+
   "function getUserPackages(uint256 userId) view returns (uint256[] memory)",
+
   "function getActiveUserPackages(uint256 userId) view returns (uint256[] memory)",
+
   "function getPackages(uint256 userId) view returns (uint256[] memory)",
+
   "function getActivePackages(uint256 userId) view returns (uint256[] memory)",
+
   "function getPackageCounts(uint256 userId) view returns (uint256 totalPackages,uint256 activePackages)",
 
-  /* PACKAGE */
+  /* ---------------- PACKAGE ---------------- */
+
   "function getPackage(uint256 packageId) view returns (uint256 id,uint256 userId,uint256 amount,uint256 maxPayout,uint256 roiPaid,uint256 levelPaid,uint256 totalPaid,uint256 startTime,uint256 lastProcessedDay,uint256 closedTime,bool emergencyClosed,uint8 status,uint256 queueIndex,uint256 activeUserPackageIndex,bool exists)",
 
-  /* CONTRACT STATE */
+  /* ---------------- SYSTEM ---------------- */
+
   "function paused() view returns (bool)",
 
-  /* SYSTEM STATS */
   "function s_systemStats() view returns (uint256 totalUsers,uint256 totalPackages,uint256 totalWithdrawRequests)",
+
   "function s_businessStats() view returns (uint256 lifetimeBusiness,uint256 currentMonthBusiness,uint256 todayBusiness,uint256 lastBusinessDay,uint256 lastBusinessMonth)",
+
   "function s_financialStats() view returns (uint256 totalWithdrawn,uint256 totalWithdrawalFees,uint256 totalRankRewardDistributed,uint256 totalRoyaltyDistributed)",
 
-  /* ROI CONFIG */
+  /* ---------------- CONFIG ---------------- */
+
   "function s_roiConfig() view returns (uint16 dailyROIBps)",
 
-  /* STAKING CONFIG */
   "function s_stakingConfig() view returns (uint256 minimumStake,uint256 minimumTopup)",
 
-  /* WITHDRAWAL CONFIG */
   "function s_withdrawalConfig() view returns (uint256 minimumWithdrawal,uint16 withdrawalFeeBps)",
 
-  /* AUTOMATION */
-  "function s_automationConfig() view returns (uint256 batchSize,bool automationEnabled)",
-  "function s_automationState() view returns (uint256 processingPointer,uint256 activePackageCount,uint256 lastProcessingDay,uint16 currentMonth,uint16 currentYear)",
-
-  /* FEATURE CONFIG */
   "function s_featureConfig() view returns (bool registrationEnabled,bool stakingEnabled,bool withdrawalEnabled,bool capitalWithdrawalEnabled)",
 
-  /* LEVEL CONFIG */
   "function s_levelConfig() view returns (bool levelIncomeEnabled)",
 
-  /* RANK CONFIG */
   "function s_rankConfig() view returns (bool rankRewardEnabled)",
 
-  /* ROYALTY CONFIG */
   "function s_royaltyConfig() view returns (bool royaltyEnabled)",
 
-  /* ACCESS CONTROL */
-  "function hasRole(bytes32 role,address account) view returns (bool)",
+  /* ---------------- ACCESS CONTROL ---------------- */
 
-  /* EVENTS */
-  "event UserRegistered(uint256 indexed userId,address indexed wallet,uint256 indexed sponsorId)",
-  "event PackageActivated(uint256 indexed packageId,uint256 indexed userId,uint256 amount)",
-  "event PackageTopup(uint256 indexed packageId,uint256 amount)",
-  "event PackageClosed(uint256 indexed packageId,uint256 indexed userId,uint8 closeStatus)",
-  "event DailyROIProcessed(uint256 indexed packageId,uint256 roiAmount)",
-  "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
-  "event RankRewardPaid(uint256 indexed userId,uint8 rank,uint256 reward)",
-  "event RoyaltyDistributed(uint256 indexed userId,uint8 royaltyLevel,uint256 amount)",
-  "event RoyaltyPaid(uint256 indexed userId,uint256 amount)",
-  "event RoyaltyLevelUpgraded(uint256 indexed userId,uint8 royaltyLevel)",
-  "event WithdrawalRequested(uint256 indexed requestId,uint256 indexed userId,uint8 walletType,uint256 amount,uint256 fee,uint256 netAmount)",
-  "event WithdrawalApproved(uint256 indexed requestId,uint256 indexed userId,uint256 amount)",
-  "event WithdrawRejected(uint256 indexed requestId,uint256 indexed userId)",
+  "function hasRole(bytes32 role,address account) view returns (bool)",
 ] as const;
 
 /* =========================================================
@@ -183,13 +198,16 @@ export const ORBI_ABI = [
 
 export const ERC20_ABI = [
   "function decimals() view returns (uint8)",
+
   "function balanceOf(address account) view returns (uint256)",
+
   "function allowance(address owner,address spender) view returns (uint256)",
+
   "function approve(address spender,uint256 amount) returns (bool)",
 ] as const;
 
 /* =========================================================
-   CONTRACT HELPERS
+   CONTRACT FACTORIES
 ========================================================= */
 
 export function getContract(
@@ -217,44 +235,12 @@ export function getUSDTContract(
 }
 
 /* =========================================================
-   FORMAT HELPERS
+   PACKAGE STATUS
 ========================================================= */
 
-export function parseUSDT(amount: string) {
-  return ethers.utils.parseUnits(
-    amount || "0",
-    USDT_DECIMALS
-  );
-}
-
-export function formatUSDT(amount: ethers.BigNumber) {
-  return ethers.utils.formatUnits(
-    amount,
-    USDT_DECIMALS
-  );
-}
-
-export function shortAddress(address?: string) {
-  if (!address) return "—";
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
-export function explorerAddress(address: string) {
-  return `${BSC_TESTNET.explorer}/address/${address}`;
-}
-
-export function explorerTx(hash: string) {
-  return `${BSC_TESTNET.explorer}/tx/${hash}`;
-}
-
-/* =========================================================
-   WALLET TYPES
-========================================================= */
-
-export enum WalletType {
-  EARNING = 0,
-  RANK = 1,
-  ROYALTY = 2,
+export enum PackageStatus {
+  ACTIVE = 0,
+  CLOSED = 1,
 }
 
 /* =========================================================
@@ -270,7 +256,17 @@ export enum UserStatus {
 }
 
 /* =========================================================
-   WITHDRAWAL STATUS
+   WALLET TYPE
+========================================================= */
+
+export enum WalletType {
+  EARNING = 0,
+  RANK = 1,
+  ROYALTY = 2,
+}
+
+/* =========================================================
+   WITHDRAW STATUS
 ========================================================= */
 
 export enum WithdrawStatus {
@@ -280,12 +276,90 @@ export enum WithdrawStatus {
 }
 
 /* =========================================================
-   NETWORK CHECK
+   FORMAT HELPERS
+========================================================= */
+
+export function parseUSDT(amount: string) {
+  return ethers.utils.parseUnits(
+    amount || "0",
+    USDT_DECIMALS
+  );
+}
+
+export function formatUSDT(
+  amount: ethers.BigNumber
+) {
+  return ethers.utils.formatUnits(
+    amount,
+    USDT_DECIMALS
+  );
+}
+
+/* =========================================================
+   NUMBER HELPERS
+========================================================= */
+
+export function toBigNumber(
+  value: any
+): ethers.BigNumber {
+  if (ethers.BigNumber.isBigNumber(value)) {
+    return value;
+  }
+
+  if (
+    value === undefined ||
+    value === null
+  ) {
+    return ethers.constants.Zero;
+  }
+
+  return ethers.BigNumber.from(value);
+}
+
+export function toNumber(
+  value: any
+): number {
+  return toBigNumber(value).toNumber();
+}
+
+/* =========================================================
+   ADDRESS HELPERS
+========================================================= */
+
+export function shortAddress(
+  address?: string
+) {
+  if (!address) {
+    return "—";
+  }
+
+  return `${address.slice(
+    0,
+    6
+  )}...${address.slice(-4)}`;
+}
+
+export function explorerAddress(
+  address: string
+) {
+  return `${BSC_TESTNET.explorer}/address/${address}`;
+}
+
+export function explorerTx(
+  hash: string
+) {
+  return `${BSC_TESTNET.explorer}/tx/${hash}`;
+}
+
+/* =========================================================
+   NETWORK
 ========================================================= */
 
 export async function ensureBscTestnet() {
   if (!window.ethereum) {
-    throw new Error("MetaMask is not installed.");
+    throw new Error(
+      "MetaMask is not installed."
+    );
   }
 
   const provider =
@@ -323,16 +397,20 @@ export async function ensureBscTestnet() {
         {
           chainId:
             BSC_TESTNET.chainHex,
+
           chainName:
-            "BSC Testnet",
+            BSC_TESTNET.name,
+
           nativeCurrency: {
             name: "BNB",
             symbol: "tBNB",
             decimals: 18,
           },
+
           rpcUrls: [
             BSC_TESTNET.rpcUrl,
           ],
+
           blockExplorerUrls: [
             BSC_TESTNET.explorer,
           ],
