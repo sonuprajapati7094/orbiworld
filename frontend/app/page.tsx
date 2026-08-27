@@ -22,7 +22,7 @@ import { ethers } from "ethers";
  * "Earning Wallet (ROI + Level)" rather than inventing separate balances.
  */
 
-const CONTRACT_ADDRESS = "0x66Aad6c966C4A4E6B90E72388248A6d21c7944a6";
+const CONTRACT_ADDRESS = "0x8c8AbFA4d9CBBCb3420Dc870bCb3B23dbDa3fe61";
 const USDT_ADDRESS = "0x855c91cF87745e01e370B671f0Da25dcC7685394";
 
 const BSC_TESTNET = {
