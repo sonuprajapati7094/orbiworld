@@ -767,68 +767,145 @@ export default function DashboardPage() {
     []
   );
 
-  /* =======================================================
-     LOAD PACKAGES — DIRECT ON-CHAIN READ
+/* =======================================================
+   LOAD PACKAGES — DIRECT ON-CHAIN READ
 
-     Package history/state comes from contract storage only:
-     getUserPackages(userId)
-     getActiveUserPackages(userId)
-     getPackage(packageId)
+   Complete history:
+   getUserPackages(userId)
 
-     No PackageActivated / PackageTopup / PackageClosed scans.
-  ======================================================= */
+   Active packages:
+   getActiveUserPackages(userId)
 
-  const loadPackages = useCallback(
-    async (c: ethers.Contract, userId: ethers.BigNumber) => {
-      const [packageIdsRaw, activePackageIdsRaw] =
-        await Promise.all([
-          c.getUserPackages(userId),
-          c.getActiveUserPackages(userId),
-        ]);
+   Package details:
+   getPackage(packageId)
 
-      const packageIds = (packageIdsRaw as any[]).map((id) =>
+   PackageStatus:
+   0 = ACTIVE
+   1 = CLOSED
+
+   No package event scanning.
+======================================================= */
+
+const loadPackages = useCallback(
+  async (
+    c: ethers.Contract,
+    userId: ethers.BigNumber
+  ) => {
+    try {
+      // 1. Get complete package IDs
+      const packageIdsRaw =
+        await c.getUserPackages(userId);
+
+      // 2. Get currently active package IDs
+      const activePackageIdsRaw =
+        await c.getActiveUserPackages(userId);
+
+      const packageIds = (
+        packageIdsRaw as any[]
+      ).map((id) =>
         bn(id).toString()
       );
 
       const activePackageIds = new Set(
-        (activePackageIdsRaw as any[]).map((id) =>
-          bn(id).toString()
+        (activePackageIdsRaw as any[]).map(
+          (id) => bn(id).toString()
         )
       );
 
-      const packageRows: PackageRow[] = await Promise.all(
-        packageIds.map(async (packageId) => {
-          const pkg = await c.getPackage(packageId);
+      // 3. Read every package directly
+      // from on-chain package struct
+      const packageRows: PackageRow[] =
+        await Promise.all(
+          packageIds.map(
+            async (packageId) => {
+              const pkg =
+                await c.getPackage(
+                  packageId
+                );
 
-          const id = bn(pkg.id ?? pkg[0]).toString();
-          const amount = bn(pkg.amount ?? pkg[2]);
-          const roiPaid = bn(pkg.roiPaid ?? pkg[4]);
-          const startTime = Number(pkg.startTime ?? pkg[7] ?? 0);
-          const status = Number(pkg.status ?? pkg[11] ?? 0);
-          const exists = Boolean(pkg.exists ?? pkg[14]);
-          const isActive = activePackageIds.has(id);
+              const id =
+                bn(
+                  pkg.id ?? pkg[0]
+                ).toString();
 
-          return {
-            packageId: id,
-            amount,
-            block: 0,
-            tx: '',
-            startTime,
-            roiPaid,
-            closed: !isActive || status !== 0 || !exists,
-          };
-        })
-      );
+              const amount =
+                bn(
+                  pkg.amount ?? pkg[2]
+                );
 
+              const roiPaid =
+                bn(
+                  pkg.roiPaid ?? pkg[4]
+                );
+
+              const startTime =
+                Number(
+                  pkg.startTime ??
+                    pkg[7] ??
+                    0
+                );
+
+              const status =
+                Number(
+                  pkg.status ??
+                    pkg[11] ??
+                    0
+                );
+
+              const exists =
+                Boolean(
+                  pkg.exists ??
+                    pkg[14]
+                );
+
+              const isActive =
+                activePackageIds.has(
+                  id
+                );
+
+              return {
+                packageId: id,
+                amount,
+                block: 0,
+                tx: "",
+                startTime,
+                roiPaid,
+
+                // Contract enum:
+                // 0 = ACTIVE
+                // 1 = CLOSED
+                closed:
+                  !isActive ||
+                  status !== 0 ||
+                  !exists,
+              };
+            }
+          )
+        );
+
+      // Latest package first
       packageRows.sort(
-        (a, b) => Number(b.packageId) - Number(a.packageId)
+        (a, b) =>
+          Number(b.packageId) -
+          Number(a.packageId)
       );
 
-      setPackages(packageRows);
-    },
-    []
-  );
+      setPackages(
+        packageRows
+      );
+    } catch (e: any) {
+      console.error(
+        "Direct package read failed:",
+        e
+      );
 
+      setPackages([]);
+
+      throw e;
+    }
+  },
+  []
+);
   /* =======================================================
      LOAD NON-PACKAGE HISTORY
 
@@ -2421,19 +2498,20 @@ function DashboardContent(
 
   switch (section) {
     case "overview":
-      return (
-        <Overview
-          profile={profile}
-          usdtBalance={
-            usdtBalance
-          }
-          total={total}
-          setSection={
-            setSection
-          }
-        />
-      );
-
+  return (
+    <Overview
+      profile={profile}
+      usdtBalance={
+        usdtBalance
+      }
+      total={total}
+      packages={packages}
+      config={config}
+      setSection={
+        setSection
+      }
+    />
+  );
     case "packages":
       return (
         <Packages
@@ -2830,8 +2908,79 @@ function Overview({
   profile,
   usdtBalance,
   total,
+  packages,
+  config,
   setSection,
 }: any) {
+  const activePackage =
+    (packages as PackageRow[]).find(
+      (item) => !item.closed
+    ) || null;
+
+  const packageInfo =
+    activePackage
+      ? (() => {
+          const target =
+            activePackage.amount.mul(
+              MAX_MULTIPLIER
+            );
+
+          const roiTarget =
+            activePackage.amount;
+
+          const roiPaid =
+            activePackage.roiPaid.gt(
+              roiTarget
+            )
+              ? roiTarget
+              : activePackage.roiPaid;
+
+          const remaining =
+            roiTarget.gt(roiPaid)
+              ? roiTarget.sub(
+                  roiPaid
+                )
+              : ZERO;
+
+          const dailyROI =
+            activePackage.amount
+              .mul(config.roiBps)
+              .div(10000);
+
+          const daysRemaining =
+            dailyROI.gt(0)
+              ? remaining
+                  .add(dailyROI)
+                  .sub(1)
+                  .div(dailyROI)
+                  .toNumber()
+              : 0;
+
+          const progress =
+            roiTarget.gt(0)
+              ? Math.min(
+                  100,
+                  Number(
+                    roiPaid
+                      .mul(100)
+                      .div(
+                        roiTarget
+                      )
+                  )
+                )
+              : 0;
+
+          return {
+            target,
+            roiPaid,
+            remaining,
+            dailyROI,
+            daysRemaining,
+            progress,
+          };
+        })()
+      : null;
+
   return (
     <>
       <div className="welcome">
@@ -2933,6 +3082,113 @@ function Overview({
           sub="Cumulative"
         />
       </div>
+
+      <Card
+  title="Active Package"
+>
+  {activePackage &&
+  packageInfo ? (
+    <>
+      <div className="grid four">
+        <Metric
+          title="Package"
+          value={`#${activePackage.packageId}`}
+          sub="On-chain"
+        />
+
+        <Metric
+          title="Staked"
+          value={`${money(
+            activePackage.amount
+          )} USDT`}
+          sub="Package amount"
+        />
+
+        <Metric
+          title="ROI Received"
+          value={`${money(
+            activePackage.roiPaid
+          )} USDT`}
+          sub="From package struct"
+        />
+
+        <Metric
+          title="Status"
+          value="ACTIVE"
+          sub="On-chain status"
+        />
+      </div>
+
+      <div className="grid four">
+        <Metric
+          title="Daily ROI"
+          value={`${(
+            config.roiBps / 100
+          ).toFixed(2)}%`}
+          sub="Contract config"
+        />
+
+        <Metric
+          title="Max Payout"
+          value={`${money(
+            packageInfo.target
+          )} USDT`}
+          sub="2× package"
+        />
+
+        <Metric
+          title="Remaining ROI"
+          value={`${money(
+            packageInfo.remaining
+          )} USDT`}
+          sub="To 2×"
+        />
+
+        <Metric
+          title="Days Remaining"
+          value={`${packageInfo.daysRemaining}`}
+          sub="Estimated"
+        />
+      </div>
+
+      <Progress
+        label="Progress to 2×"
+        value={
+          packageInfo.progress
+        }
+      />
+
+      <button
+        className="secondary full"
+        onClick={() =>
+          setSection(
+            "packages"
+          )
+        }
+      >
+        Open My Packages
+      </button>
+    </>
+  ) : (
+    <>
+      <p className="muted">
+        No active package found
+        on-chain.
+      </p>
+
+      <button
+        className="secondary full"
+        onClick={() =>
+          setSection(
+            "packages"
+          )
+        }
+      >
+        Open My Packages
+      </button>
+    </>
+  )}
+</Card>
 
       <div className="two">
         <Card title="Business Snapshot">
