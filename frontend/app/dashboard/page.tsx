@@ -1,28 +1,25 @@
 "use client";
 
-import React, {
+import {
   useCallback,
   useEffect,
   useMemo,
   useState,
+  type ReactNode,
 } from "react";
+
 import { ethers } from "ethers";
 
 import {
   CONTRACT_ADDRESS,
-  USDT_ADDRESS,
-  ORBI_ABI,
-  ERC20_ABI,
   BSC_TESTNET,
-  PackageStatus,
-  UserStatus,
   WalletType,
-  formatUSDT,
-  parseUSDT,
-  shortAddress,
-  ensureBscTestnet,
   getContract,
   getUSDTContract,
+  parseUSDT,
+  formatUSDT,
+  shortAddress,
+  ensureBscTestnet,
 } from "../../lib/contract";
 
 /* =========================================================
@@ -32,16 +29,25 @@ import {
 type Section =
   | "overview"
   | "packages"
-  | "business"
   | "earnings"
+  | "business"
   | "referral"
+  | "level-income"
+  | "rank"
+  | "royalty"
   | "withdrawal"
+  | "emergency"
+  | "history-staking"
+  | "history-withdrawal"
+  | "history-rank"
+  | "history-royalty"
   | "profile";
 
-type UserData = {
+type Profile = {
   id: ethers.BigNumber;
   wallet: string;
   sponsorId: ethers.BigNumber;
+
   status: number;
 
   directCount: number;
@@ -69,805 +75,370 @@ type UserData = {
   royalty: number;
 };
 
-type PackageData = {
+type Config = {
+  minStake: ethers.BigNumber;
+  minTopup: ethers.BigNumber;
+  minWithdrawal: ethers.BigNumber;
+
+  feeBps: number;
+  roiBps: number;
+
+  registrationEnabled: boolean;
+  stakingEnabled: boolean;
+  withdrawalEnabled: boolean;
+  capitalWithdrawalEnabled: boolean;
+
+  levelEnabled: boolean;
+  rankEnabled: boolean;
+  royaltyEnabled: boolean;
+
+  maxPackageMultiplier: number;
+  bpsDivider: number;
+
+  levels: number[];
+  ranks: {
+    name: string;
+    power: ethers.BigNumber;
+    other: ethers.BigNumber;
+    reward: ethers.BigNumber;
+  }[];
+  royalties: {
+    name: string;
+    lifetime: ethers.BigNumber;
+    monthly: ethers.BigNumber;
+    directs: number;
+    bps: number;
+  }[];
+};
+
+type PackageRow = {
   packageId: string;
-  userId: string;
   amount: ethers.BigNumber;
-  maxPayout: ethers.BigNumber;
+  block: number;
+  tx: string;
+  startTime: number;
   roiPaid: ethers.BigNumber;
   levelPaid: ethers.BigNumber;
   totalPaid: ethers.BigNumber;
-  startTime: number;
-  lastProcessedDay: number;
-  closedTime: number;
-  emergencyClosed: boolean;
+  maxPayout: ethers.BigNumber;
   status: number;
-  queueIndex: number;
-  activeUserPackageIndex: number;
-  exists: boolean;
-  active: boolean;
+  emergencyClosed: boolean;
+  closed: boolean;
+  closeStatus?: number;
 };
 
-type DirectUser = {
+type AutomationStatus = {
+  enabled: boolean;
+  hasRole: boolean;
+  batchSize: ethers.BigNumber;
+  lastProcessingDay: ethers.BigNumber;
+  currentDay: ethers.BigNumber;
+  processedToday: boolean;
+};
+
+type WithdrawalRow = {
+  requestId: string;
+  walletType: number;
+
+  amount: ethers.BigNumber;
+  fee: ethers.BigNumber;
+  netAmount: ethers.BigNumber;
+
+  block: number;
+  tx: string;
+
+  status: "PENDING" | "APPROVED" | "REJECTED";
+};
+
+type RankRow = {
+  rank: number;
+  reward: ethers.BigNumber;
+  block: number;
+  tx: string;
+};
+
+type RoyaltyRow = {
+  level: number;
+  amount: ethers.BigNumber;
+  block: number;
+  tx: string;
+};
+
+type TeamRow = {
   id: string;
   wallet: string;
   sponsorId: string;
   status: number;
   directCount: number;
   activeDirectCount: number;
-  lifetimeBusiness: ethers.BigNumber;
-  monthlyBusiness: ethers.BigNumber;
-  todayBusiness: ethers.BigNumber;
-  powerLegBusiness: ethers.BigNumber;
-  otherLegBusiness: ethers.BigNumber;
-  earningWallet: ethers.BigNumber;
-  rankWallet: ethers.BigNumber;
-  royaltyWallet: ethers.BigNumber;
-  totalROIIncome: ethers.BigNumber;
-  totalLevelIncome: ethers.BigNumber;
-  totalRankIncome: ethers.BigNumber;
-  totalRoyaltyIncome: ethers.BigNumber;
-  totalWithdrawn: ethers.BigNumber;
-  rank: number;
-  royalty: number;
 };
 
 /* =========================================================
    CONSTANTS
 ========================================================= */
 
-const LEVEL_PERCENTAGES = [
-  10,
-  5,
-  3,
-  2,
-  1,
-  1,
-  1,
-  1,
-  1,
-  1,
-];
-
 const ZERO = ethers.constants.Zero;
 
-const EMPTY_USER: UserData = {
-  id: ZERO,
-  wallet: ethers.constants.AddressZero,
-  sponsorId: ZERO,
-  status: UserStatus.NONE,
+const DEFAULT_ADMIN_ROLE = ethers.constants.HashZero;
 
-  directCount: 0,
-  activeDirectCount: 0,
+const ACCESS_CONTROL_ABI = [
+  "function hasRole(bytes32 role,address account) view returns (bool)",
+];
 
-  lifetimeBusiness: ZERO,
-  monthlyBusiness: ZERO,
-  todayBusiness: ZERO,
+const READ_ABI = [
+  "function s_stakingConfig() view returns (uint256 minimumStake,uint256 minimumTopup)",
+  "function s_roiConfig() view returns (uint16 dailyROIBps)",
+  "function s_withdrawalConfig() view returns (uint256 minimumWithdrawal,uint16 withdrawalFeeBps)",
+  "function s_featureConfig() view returns (bool registrationEnabled,bool stakingEnabled,bool withdrawalEnabled,bool capitalWithdrawalEnabled)",
+  "function MAX_PACKAGE_MULTIPLIER() view returns (uint8)",
+  "function BPS_DIVIDER() view returns (uint16)",
+  "function getUserPackages(uint256 userId) view returns (uint256[] memory)",
+  "function getActiveUserPackages(uint256 userId) view returns (uint256[] memory)",
+  "function getPackage(uint256 packageId) view returns (tuple(uint256 packageId,uint256 userId,uint256 amount,uint256 maxPayout,uint256 roiPaid,uint256 levelPaid,uint256 totalPaid,uint256 startTime,uint256 lastProcessedDay,uint256 closedTime,bool emergencyClosed,uint8 status,uint256 queueIndex,uint256 activeUserPackageIndex,bool exists))",
+  "function getDirectReferrals(uint256 userId) view returns (uint256[] memory)",
+  "function getDirectLegBusiness(uint256 sponsorId,uint256 directUserId) view returns (uint256)",
+  "function s_rankConfig() view returns (tuple(tuple(uint256 requiredPowerLeg,uint256 requiredOtherLeg,uint256 reward)[6] ranks,bool rankRewardEnabled))",
+  "function s_royaltyConfig() view returns (tuple(tuple(uint256 requiredLifetimeBusiness,uint256 requiredMonthlyBusiness,uint8 minimumActiveDirects,uint16 royaltyBps)[2] royalty,bool royaltyEnabled))",
+  "function s_levelConfig() view returns (tuple(uint16[10] levelIncomeBps,bool levelIncomeEnabled))",
+  "function s_automationConfig() view returns (uint256 batchSize,bool automationEnabled)",
+  "function s_automationState() view returns (uint256 processingPointer,uint256 activePackageCount,uint256 lastProcessingDay,uint16 currentMonth,uint16 currentYear)",
+  "function hasRole(bytes32 role,address account) view returns (bool)",
+];
 
-  powerLegBusiness: ZERO,
-  otherLegBusiness: ZERO,
-
-  earningWallet: ZERO,
-  rankWallet: ZERO,
-  royaltyWallet: ZERO,
-
-  totalROIIncome: ZERO,
-  totalLevelIncome: ZERO,
-  totalRankIncome: ZERO,
-  totalRoyaltyIncome: ZERO,
-
-  totalWithdrawn: ZERO,
-
-  rank: 0,
-  royalty: 0,
-};
+const AUTOMATION_ROLE = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("AUTOMATION_ROLE"));
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
 function bn(value: any): ethers.BigNumber {
-  if (ethers.BigNumber.isBigNumber(value)) {
-    return value;
-  }
-
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
+  try {
+    return ethers.BigNumber.from(value ?? 0);
+  } catch {
     return ZERO;
   }
-
-  return ethers.BigNumber.from(value);
 }
 
-function num(value: any): number {
-  return bn(value).toNumber();
+function units(value: string) {
+  return parseUSDT(value || "0");
 }
 
-function userFromTuple(raw: any): UserData {
-  return {
-    id: bn(raw.id ?? raw[0]),
-    wallet: raw.wallet ?? raw[1],
-    sponsorId: bn(
-      raw.sponsorId ?? raw[2]
-    ),
-    status: Number(
-      raw.status ?? raw[3] ?? 0
-    ),
+function money(value: any) {
+  const number = Number(formatUSDT(bn(value)));
 
-    directCount: Number(
-      raw.directCount ?? raw[4] ?? 0
-    ),
-    activeDirectCount: Number(
-      raw.activeDirectCount ??
-        raw[5] ??
-        0
-    ),
-
-    lifetimeBusiness: bn(
-      raw.lifetimeBusiness ?? raw[6]
-    ),
-    monthlyBusiness: bn(
-      raw.monthlyBusiness ?? raw[7]
-    ),
-    todayBusiness: bn(
-      raw.todayBusiness ?? raw[8]
-    ),
-
-    powerLegBusiness: bn(
-      raw.powerLegBusiness ?? raw[9]
-    ),
-    otherLegBusiness: bn(
-      raw.otherLegBusiness ?? raw[10]
-    ),
-
-    earningWallet: bn(
-      raw.earningWallet ?? raw[11]
-    ),
-    rankWallet: bn(
-      raw.rankWallet ?? raw[12]
-    ),
-    royaltyWallet: bn(
-      raw.royaltyWallet ?? raw[13]
-    ),
-
-    totalROIIncome: bn(
-      raw.totalROIIncome ?? raw[14]
-    ),
-    totalLevelIncome: bn(
-      raw.totalLevelIncome ?? raw[15]
-    ),
-    totalRankIncome: bn(
-      raw.totalRankIncome ?? raw[16]
-    ),
-    totalRoyaltyIncome: bn(
-      raw.totalRoyaltyIncome ?? raw[17]
-    ),
-
-    totalWithdrawn: bn(
-      raw.totalWithdrawn ?? raw[18]
-    ),
-
-    rank: Number(
-      raw.rank ?? raw[19] ?? 0
-    ),
-    royalty: Number(
-      raw.royalty ?? raw[20] ?? 0
-    ),
-  };
-}
-
-function packageFromTuple(
-  raw: any,
-  activeIds: Set<string>
-): PackageData {
-  const packageId = bn(
-    raw.id ?? raw.packageId ?? raw[0]
-  );
-
-  const id = packageId.toString();
-
-  const status = Number(
-    raw.status ?? raw[11] ?? 0
-  );
-
-  return {
-    packageId: id,
-
-    userId: bn(
-      raw.userId ?? raw[1]
-    ).toString(),
-
-    amount: bn(
-      raw.amount ?? raw[2]
-    ),
-
-    maxPayout: bn(
-      raw.maxPayout ?? raw[3]
-    ),
-
-    roiPaid: bn(
-      raw.roiPaid ?? raw[4]
-    ),
-
-    levelPaid: bn(
-      raw.levelPaid ?? raw[5]
-    ),
-
-    totalPaid: bn(
-      raw.totalPaid ?? raw[6]
-    ),
-
-    startTime: num(
-      raw.startTime ?? raw[7]
-    ),
-
-    lastProcessedDay: num(
-      raw.lastProcessedDay ??
-        raw[8]
-    ),
-
-    closedTime: num(
-      raw.closedTime ?? raw[9]
-    ),
-
-    emergencyClosed:
-      Boolean(
-        raw.emergencyClosed ??
-          raw[10]
-      ),
-
-    status,
-
-    queueIndex: num(
-      raw.queueIndex ?? raw[12]
-    ),
-
-    activeUserPackageIndex:
-      num(
-        raw.activeUserPackageIndex ??
-          raw[13]
-      ),
-
-    exists: Boolean(
-      raw.exists ?? raw[14]
-    ),
-
-    active:
-      activeIds.has(id) &&
-      status ===
-        PackageStatus.ACTIVE &&
-      Boolean(
-        raw.exists ?? raw[14]
-      ),
-  };
-}
-
-function directUserFromTuple(
-  raw: any
-): DirectUser {
-  const user = userFromTuple(raw);
-
-  return {
-    id: user.id.toString(),
-    wallet: user.wallet,
-    sponsorId:
-      user.sponsorId.toString(),
-    status: user.status,
-    directCount:
-      user.directCount,
-    activeDirectCount:
-      user.activeDirectCount,
-
-    lifetimeBusiness:
-      user.lifetimeBusiness,
-    monthlyBusiness:
-      user.monthlyBusiness,
-    todayBusiness:
-      user.todayBusiness,
-
-    powerLegBusiness:
-      user.powerLegBusiness,
-    otherLegBusiness:
-      user.otherLegBusiness,
-
-    earningWallet:
-      user.earningWallet,
-    rankWallet:
-      user.rankWallet,
-    royaltyWallet:
-      user.royaltyWallet,
-
-    totalROIIncome:
-      user.totalROIIncome,
-    totalLevelIncome:
-      user.totalLevelIncome,
-    totalRankIncome:
-      user.totalRankIncome,
-    totalRoyaltyIncome:
-      user.totalRoyaltyIncome,
-
-    totalWithdrawn:
-      user.totalWithdrawn,
-
-    rank: user.rank,
-    royalty: user.royalty,
-  };
-}
-
-function formatDate(
-  timestamp: number
-): string {
-  if (!timestamp) {
-    return "—";
+  if (!Number.isFinite(number)) {
+    return "0.00";
   }
 
-  return new Date(
-    timestamp * 1000
-  ).toLocaleDateString(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    }
+  return number.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function errorText(error: any, fallback: string) {
+  return (
+    error?.error?.message ||
+    error?.data?.message ||
+    error?.reason ||
+    error?.message ||
+    fallback
   );
 }
 
-function formatDateTime(
-  timestamp: number
-): string {
-  if (!timestamp) {
-    return "—";
-  }
-
-  return new Date(
-    timestamp * 1000
-  ).toLocaleString(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }
+function statusLabel(status: number) {
+  return (
+    [
+      "NONE",
+      "INACTIVE",
+      "ACTIVE",
+      "EMERGENCY EXIT",
+      "BLACKLISTED",
+    ][status] || "UNKNOWN"
   );
 }
 
-function statusLabel(
-  status: number
-): string {
-  switch (status) {
-    case UserStatus.ACTIVE:
-      return "ACTIVE";
+function rankLabel(rank: number) {
+  return rank === 0 ? "NONE" : `R${rank}`;
+}
 
-    case UserStatus.INACTIVE:
-      return "INACTIVE";
+function royaltyLabel(level: number) {
+  if (level === 1) return "1%";
+  if (level === 2) return "2%";
+  return "NONE";
+}
 
-    case UserStatus.EMERGENCY_EXIT:
-      return "EMERGENCY EXIT";
-
-    case UserStatus.BLACKLISTED:
-      return "BLACKLISTED";
-
-    default:
-      return "NOT REGISTERED";
+function walletLabel(walletType: number) {
+  if (walletType === WalletType.EARNING) {
+    return "Earning";
   }
+
+  if (walletType === WalletType.RANK) {
+    return "Rank";
+  }
+
+  return "Royalty";
+}
+
+function txUrl(hash: string) {
+  return `${BSC_TESTNET.explorer}/tx/${hash}`;
+}
+
+function addressUrl(address: string) {
+  return `${BSC_TESTNET.explorer}/address/${address}`;
 }
 
 /* =========================================================
-   SMALL UI COMPONENTS
+   NAVIGATION
 ========================================================= */
 
-function StatCard({
-  label,
-  value,
-  sub,
-}: {
+const MAIN_NAV: {
+  id: Section;
   label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <div className="statCard">
-      <div className="statLabel">
-        {label}
-      </div>
+  icon: string;
+}[] = [
+  {
+    id: "overview",
+    label: "Overview",
+    icon: "⌂",
+  },
+  {
+    id: "packages",
+    label: "My Packages",
+    icon: "▣",
+  },
+  {
+    id: "earnings",
+    label: "Earnings",
+    icon: "◈",
+  },
+  {
+    id: "business",
+    label: "Business Center",
+    icon: "♧",
+  },
+  {
+    id: "referral",
+    label: "Referral Center",
+    icon: "↗",
+  },
+   {
+    id: "level-income",
+    label: "Level Income",
+    icon: "◉",
+  },
+  {
+    id: "rank",
+    label: "Rank Center",
+    icon: "★",
+  },
+  {
+    id: "royalty",
+    label: "Royalty Center",
+    icon: "♛",
+  },
+  {
+    id: "withdrawal",
+    label: "Withdrawal",
+    icon: "⇧",
+  },
+  {
+    id: "emergency",
+    label: "Emergency Capital Withdrawal",
+    icon: "⚠",
+  },
+];
 
-      <div className="statValue">
-        {value}
-      </div>
-
-      {sub && (
-        <div className="statSub">
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SectionTitle({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description?: string;
-}) {
-  return (
-    <div className="sectionTitle">
-      <span className="eyebrow">
-        {eyebrow}
-      </span>
-
-      <h2>{title}</h2>
-
-      {description && (
-        <p>{description}</p>
-      )}
-    </div>
-  );
-}
-
-function EmptyState({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="emptyState">
-      <div className="emptyIcon">
-        ○
-      </div>
-
-      <h3>{title}</h3>
-
-      <p>{description}</p>
-    </div>
-  );
-}
-
-/* =========================================================
-   LOGIN
-========================================================= */
-
-function LoginScreen({
-  onConnect,
-  busy,
-  error,
-}: {
-  onConnect: () => void;
-  busy: boolean;
-  error: string;
-}) {
-  return (
-    <main className="loginPage">
-      <div className="loginCard">
-        <div className="logoBox">
-          <img
-            src="/orbi-logo.png"
-            alt="ORBI"
-          />
-        </div>
-
-        <span className="eyebrow">
-          ORBIWORLD
-        </span>
-
-        <h1>
-          Web3 Dashboard
-        </h1>
-
-        <p>
-          Connect your wallet to
-          access your ORBI account,
-          staking, earnings, business
-          and referral data.
-        </p>
-
-        {error && (
-          <div className="errorBox">
-            {error}
-          </div>
-        )}
-
-        <button
-          className="primaryButton"
-          onClick={onConnect}
-          disabled={busy}
-        >
-          {busy
-            ? "Connecting..."
-            : "Connect Wallet"}
-        </button>
-
-        <div className="networkText">
-          BSC Testnet
-        </div>
-      </div>
-    </main>
-  );
-}
+const HISTORY_NAV: {
+  id: Section;
+  label: string;
+}[] = [
+  {
+    id: "history-staking",
+    label: "Staking History",
+  },
+  {
+    id: "history-withdrawal",
+    label: "Withdrawal History",
+  },
+  {
+    id: "history-rank",
+    label: "Rank Reward History",
+  },
+  {
+    id: "history-royalty",
+    label: "Royalty History",
+  },
+];
 
 /* =========================================================
-   REGISTRATION
-========================================================= */
-
-function RegistrationScreen({
-  account,
-  onRegister,
-  busy,
-  error,
-}: {
-  account: string;
-  onRegister: (
-    sponsor: string
-  ) => void;
-  busy: boolean;
-  error: string;
-}) {
-  const [sponsor, setSponsor] =
-    useState("");
-
-  return (
-    <main className="loginPage">
-      <div className="loginCard">
-        <div className="logoBox">
-          <img
-            src="/orbi-logo.png"
-            alt="ORBI"
-          />
-        </div>
-
-        <span className="eyebrow">
-          ACCOUNT SETUP
-        </span>
-
-        <h1>
-          Register your wallet
-        </h1>
-
-        <p>
-          This wallet is not
-          registered in the ORBI
-          contract.
-        </p>
-
-        <div className="walletPreview">
-          {shortAddress(account)}
-        </div>
-
-        <label className="fieldLabel">
-          Sponsor wallet
-        </label>
-
-        <input
-          className="input"
-          value={sponsor}
-          onChange={(e) =>
-            setSponsor(e.target.value)
-          }
-          placeholder="0x..."
-        />
-
-        <div className="fieldHint">
-          Leave empty only if the
-          contract permits zero sponsor.
-        </div>
-
-        {error && (
-          <div className="errorBox">
-            {error}
-          </div>
-        )}
-
-        <button
-          className="primaryButton"
-          disabled={busy}
-          onClick={() =>
-            onRegister(
-              sponsor.trim() ||
-                ethers.constants.AddressZero
-            )
-          }
-        >
-          {busy
-            ? "Registering..."
-            : "Register Wallet"}
-        </button>
-      </div>
-    </main>
-  );
-}
-
-/* =========================================================
-   PACKAGE CARD
-========================================================= */
-
-function PackageCard({
-  pkg,
-}: {
-  pkg: PackageData;
-}) {
-  const roiPercent = pkg.amount.gt(0)
-    ? pkg.roiPaid
-        .mul(100)
-        .div(pkg.amount)
-        .toNumber()
-    : 0;
-
-  return (
-    <div className="packageCard">
-      <div className="packageTop">
-        <div>
-          <span className="packageLabel">
-            PACKAGE
-          </span>
-
-          <h3>
-            #{pkg.packageId}
-          </h3>
-        </div>
-
-        <span
-          className={`statusBadge ${
-            pkg.active
-              ? "active"
-              : "closed"
-          }`}
-        >
-          {pkg.active
-            ? "ACTIVE"
-            : "CLOSED"}
-        </span>
-      </div>
-
-      <div className="packageAmount">
-        $
-        {formatUSDT(pkg.amount)}
-      </div>
-
-      <div className="packageGrid">
-        <div>
-          <span>Max Payout</span>
-          <strong>
-            $
-            {formatUSDT(
-              pkg.maxPayout
-            )}
-          </strong>
-        </div>
-
-        <div>
-          <span>ROI Paid</span>
-          <strong>
-            $
-            {formatUSDT(
-              pkg.roiPaid
-            )}
-          </strong>
-        </div>
-
-        <div>
-          <span>Level Paid</span>
-          <strong>
-            $
-            {formatUSDT(
-              pkg.levelPaid
-            )}
-          </strong>
-        </div>
-
-        <div>
-          <span>Total Paid</span>
-          <strong>
-            $
-            {formatUSDT(
-              pkg.totalPaid
-            )}
-          </strong>
-        </div>
-      </div>
-
-      <div className="progressBlock">
-        <div className="progressHeader">
-          <span>
-            Payout progress
-          </span>
-
-          <span>
-            {roiPercent}%
-          </span>
-        </div>
-
-        <div className="progressTrack">
-          <div
-            className="progressFill"
-            style={{
-              width: `${Math.min(
-                roiPercent,
-                100
-              )}%`,
-            }}
-          />
-        </div>
-      </div>
-
-      <div className="packageFooter">
-        <span>
-          Started{" "}
-          {formatDate(
-            pkg.startTime
-          )}
-        </span>
-
-        <span>
-          {pkg.active
-            ? "On-chain active"
-            : pkg.closedTime
-            ? `Closed ${formatDate(
-                pkg.closedTime
-              )}`
-            : "Closed"}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   MAIN PAGE
+   MAIN COMPONENT
 ========================================================= */
 
 export default function DashboardPage() {
-  const [account, setAccount] =
-    useState("");
+  const [account, setAccount] = useState("");
 
   const [provider, setProvider] =
-    useState<ethers.providers.Web3Provider | null>(
-      null
-    );
+    useState<ethers.providers.Web3Provider | null>(null);
+
+  const [signer, setSigner] =
+    useState<ethers.Signer | null>(null);
 
   const [contract, setContract] =
-    useState<ethers.Contract | null>(
-      null
-    );
+    useState<ethers.Contract | null>(null);
 
-  const [usdt, setUsdt] =
-    useState<ethers.Contract | null>(
-      null
-    );
+  const [token, setToken] =
+    useState<ethers.Contract | null>(null);
 
   const [profile, setProfile] =
-    useState<UserData | null>(null);
+    useState<Profile | null>(null);
 
-  const [packages, setPackages] =
-    useState<PackageData[]>([]);
+  const [config, setConfig] = useState<Config>({
+    minStake: parseUSDT("50"),
+    minTopup: parseUSDT("50"),
+    minWithdrawal: parseUSDT("20"),
 
-  const [directUsers, setDirectUsers] =
-    useState<DirectUser[]>([]);
+    feeBps: 1000,
+    roiBps: 50,
+
+    registrationEnabled: true,
+    stakingEnabled: true,
+    withdrawalEnabled: true,
+    capitalWithdrawalEnabled: true,
+
+    levelEnabled: true,
+    rankEnabled: true,
+    royaltyEnabled: true,
+    maxPackageMultiplier: 2,
+    bpsDivider: 10000,
+    levels: [],
+    ranks: [],
+    royalties: [],
+  });
+
+  const [usdtBalance, setUsdtBalance] =
+    useState<ethers.BigNumber>(ZERO);
 
   const [section, setSection] =
     useState<Section>("overview");
 
-  const [loading, setLoading] =
-    useState(false);
+  const [packages, setPackages] =
+    useState<PackageRow[]>([]);
 
-  const [txBusy, setTxBusy] =
-    useState(false);
+  const [automationStatus, setAutomationStatus] =
+    useState<AutomationStatus | null>(null);
 
-  const [error, setError] =
-    useState("");
+  const [withdrawals, setWithdrawals] =
+    useState<WithdrawalRow[]>([]);
 
-  const [info, setInfo] =
-    useState("");
+  const [rankHistory, setRankHistory] =
+    useState<RankRow[]>([]);
+
+  const [royaltyHistory, setRoyaltyHistory] =
+    useState<RoyaltyRow[]>([]);
+
+  const [team, setTeam] =
+    useState<TeamRow[]>([]);
 
   const [stakeAmount, setStakeAmount] =
     useState("");
@@ -876,12 +447,656 @@ export default function DashboardPage() {
     useState("");
 
   const [withdrawWallet, setWithdrawWallet] =
-    useState<WalletType>(
-      WalletType.EARNING
-    );
+    useState<WalletType>(WalletType.EARNING);
+
+  const [busy, setBusy] =
+    useState(false);
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [connecting, setConnecting] =
+    useState(false);
+
+  const [message, setMessage] =
+    useState("");
+
+  const [error, setError] =
+    useState("");
+
+  const [historyOpen, setHistoryOpen] =
+    useState(true);
 
   const [mobileOpen, setMobileOpen] =
     useState(false);
+
+  /* =======================================================
+     REFERRAL LINK
+  ======================================================= */
+
+  const referralLink = useMemo(() => {
+    if (!account || typeof window === "undefined") {
+      return "";
+    }
+
+    return `${window.location.origin}/dashboard?ref=${account}`;
+  }, [account]);
+
+  /* =======================================================
+     TOTAL AVAILABLE
+  ======================================================= */
+
+  const totalAvailable = useMemo(() => {
+    if (!profile) {
+      return ZERO;
+    }
+
+    return profile.earningWallet
+      .add(profile.rankWallet)
+      .add(profile.royaltyWallet);
+  }, [profile]);
+
+  /* =======================================================
+     NOTIFICATION
+  ======================================================= */
+
+  const notify = useCallback((text: string) => {
+    setMessage(text);
+
+    window.setTimeout(() => {
+      setMessage("");
+    }, 5000);
+  }, []);
+
+  /* =======================================================
+     CLEAR STATE
+  ======================================================= */
+
+  const clearState = useCallback(() => {
+    setAccount("");
+
+    setProvider(null);
+    setSigner(null);
+    setContract(null);
+    setToken(null);
+
+    setProfile(null);
+
+    setPackages([]);
+    setAutomationStatus(null);
+    setWithdrawals([]);
+    setRankHistory([]);
+    setRoyaltyHistory([]);
+    setTeam([]);
+
+    setUsdtBalance(ZERO);
+  }, []);
+
+  /* =======================================================
+     LOAD CONFIG
+  ======================================================= */
+
+  const loadConfig = useCallback(
+    async (c: ethers.Contract) => {
+      const read = new ethers.Contract(CONTRACT_ADDRESS, READ_ABI, c.provider);
+      const [
+        staking, withdrawal, roi, features, level, rank, royalty,
+        maxMultiplier, bpsDivider,
+      ] = await Promise.all([
+        read.s_stakingConfig(),
+        read.s_withdrawalConfig(),
+        read.s_roiConfig(),
+        read.s_featureConfig(),
+        read.s_levelConfig(),
+        read.s_rankConfig(),
+        read.s_royaltyConfig(),
+        read.MAX_PACKAGE_MULTIPLIER(),
+        read.BPS_DIVIDER(),
+      ]);
+
+      const rankItems = Array.from({ length: 6 }, (_, i) => {
+        const r = rank.ranks?.[i] ?? rank[0]?.[i];
+        return {
+          name: `R${i + 1}`,
+          power: bn(r?.requiredPowerLeg ?? r?.[0]),
+          other: bn(r?.requiredOtherLeg ?? r?.[1]),
+          reward: bn(r?.reward ?? r?.[2]),
+        };
+      });
+
+      const royaltyItems = Array.from({ length: 2 }, (_, i) => {
+        const r = royalty.royalty?.[i] ?? royalty[0]?.[i];
+        const bps = Number(r?.royaltyBps ?? r?.[3] ?? 0);
+        return {
+          name: `${bps / 100}%`,
+          lifetime: bn(r?.requiredLifetimeBusiness ?? r?.[0]),
+          monthly: bn(r?.requiredMonthlyBusiness ?? r?.[1]),
+          directs: Number(r?.minimumActiveDirects ?? r?.[2] ?? 0),
+          bps,
+        };
+      });
+
+      const levelBps = Array.from({ length: 10 }, (_, i) =>
+        Number(level.levelIncomeBps?.[i] ?? level[0]?.[i] ?? 0)
+      );
+
+      setConfig({
+        minStake: bn(staking.minimumStake ?? staking[0]),
+        minTopup: bn(staking.minimumTopup ?? staking[1]),
+        minWithdrawal: bn(withdrawal.minimumWithdrawal ?? withdrawal[0]),
+        feeBps: Number(withdrawal.withdrawalFeeBps ?? withdrawal[1]),
+        roiBps: Number(roi.dailyROIBps ?? roi[0]),
+        registrationEnabled: Boolean(features.registrationEnabled ?? features[0]),
+        stakingEnabled: Boolean(features.stakingEnabled ?? features[1]),
+        withdrawalEnabled: Boolean(features.withdrawalEnabled ?? features[2]),
+        capitalWithdrawalEnabled: Boolean(features.capitalWithdrawalEnabled ?? features[3]),
+        levelEnabled: Boolean(level.levelIncomeEnabled ?? level[1] ?? level[0]),
+        rankEnabled: Boolean(rank.rankRewardEnabled ?? rank[1] ?? rank[0]),
+        royaltyEnabled: Boolean(royalty.royaltyEnabled ?? royalty[1] ?? royalty[0]),
+        maxPackageMultiplier: Number(maxMultiplier),
+        bpsDivider: Number(bpsDivider),
+        levels: levelBps,
+        ranks: rankItems,
+        royalties: royaltyItems,
+      });
+    },
+    []
+  );
+
+  /* =======================================================
+     LOAD PROFILE
+  ======================================================= */
+
+  const loadProfile = useCallback(
+    async (
+      c: ethers.Contract,
+      address: string
+    ) => {
+      const registered =
+        await c.isRegistered(address);
+
+      if (!registered) {
+        setProfile(null);
+        return false;
+      }
+
+      const raw =
+        await c.myProfile();
+
+      const parsed: Profile = {
+        id: bn(raw.id ?? raw[0]),
+
+        wallet:
+          raw.wallet ?? raw[1],
+
+        sponsorId:
+          bn(raw.sponsorId ?? raw[2]),
+
+        status:
+          Number(raw.status ?? raw[3] ?? 0),
+
+        directCount:
+          Number(raw.directCount ?? raw[4] ?? 0),
+
+        activeDirectCount:
+          Number(
+            raw.activeDirectCount ??
+              raw[5] ??
+              0
+          ),
+
+        lifetimeBusiness:
+          bn(
+            raw.lifetimeBusiness ??
+              raw[6]
+          ),
+
+        monthlyBusiness:
+          bn(
+            raw.monthlyBusiness ??
+              raw[7]
+          ),
+
+        todayBusiness:
+          bn(
+            raw.todayBusiness ??
+              raw[8]
+          ),
+
+        powerLegBusiness:
+          bn(
+            raw.powerLegBusiness ??
+              raw[9]
+          ),
+
+        otherLegBusiness:
+          bn(
+            raw.otherLegBusiness ??
+              raw[10]
+          ),
+
+        earningWallet:
+          bn(
+            raw.earningWallet ??
+              raw[11]
+          ),
+
+        rankWallet:
+          bn(
+            raw.rankWallet ??
+              raw[12]
+          ),
+
+        royaltyWallet:
+          bn(
+            raw.royaltyWallet ??
+              raw[13]
+          ),
+
+        totalROIIncome:
+          bn(
+            raw.totalROIIncome ??
+              raw[14]
+          ),
+
+        totalLevelIncome:
+          bn(
+            raw.totalLevelIncome ??
+              raw[15]
+          ),
+
+        totalRankIncome:
+          bn(
+            raw.totalRankIncome ??
+              raw[16]
+          ),
+
+        totalRoyaltyIncome:
+          bn(
+            raw.totalRoyaltyIncome ??
+              raw[17]
+          ),
+
+        totalWithdrawn:
+          bn(
+            raw.totalWithdrawn ??
+              raw[18]
+          ),
+
+        rank:
+          Number(
+            raw.rank ??
+              raw[19] ??
+              0
+          ),
+
+        royalty:
+          Number(
+            raw.royalty ??
+              raw[20] ??
+              0
+          ),
+      };
+
+      setProfile(parsed);
+
+      return true;
+    },
+    []
+  );
+
+  /* =======================================================
+     LOAD EVENTS
+  ======================================================= */
+
+  const loadEvents = useCallback(
+    async (c: ethers.Contract, p: Profile) => {
+      const read = new ethers.Contract(CONTRACT_ADDRESS, READ_ABI, c.provider);
+      const latest = await c.provider.getBlockNumber();
+      const fromBlock = Math.max(0, latest - 50000);
+
+      const safeQuery = async (filter: any, startBlock = fromBlock) => {
+        try {
+          return await c.queryFilter(filter, startBlock, latest);
+        } catch (e) {
+          console.warn("History query failed:", e);
+          return [];
+        }
+      };
+
+      // PACKAGE SOURCE OF TRUTH: package IDs + package structs are read directly from storage.
+      const packageIds = await read.getUserPackages(p.id);
+      const activeIds = new Set(
+        (await read.getActiveUserPackages(p.id)).map((id: any) => bn(id).toString())
+      );
+
+      const packageRows: PackageRow[] = [];
+      for (const rawId of packageIds as any[]) {
+        const id = bn(rawId).toString();
+        const pkg = await read.getPackage(rawId);
+        const status = Number(pkg.status ?? pkg[11] ?? 0);
+        const row: PackageRow = {
+          packageId: id,
+          amount: bn(pkg.amount ?? pkg[2]),
+          block: 0,
+          tx: "",
+          startTime: Number(pkg.startTime ?? pkg[7] ?? 0),
+          roiPaid: bn(pkg.roiPaid ?? pkg[4]),
+          levelPaid: bn(pkg.levelPaid ?? pkg[5]),
+          totalPaid: bn(pkg.totalPaid ?? pkg[6]),
+          maxPayout: bn(pkg.maxPayout ?? pkg[3]),
+          status,
+          emergencyClosed: Boolean(pkg.emergencyClosed ?? pkg[10]),
+          closed: status === 1 || !activeIds.has(id),
+        };
+        packageRows.push(row);
+      }
+
+      // Events are history metadata only, never package state.
+      const [activated, topups, requested, approved, rejected, rankEvents, royaltyEvents, registered] = await Promise.all([
+        safeQuery(c.filters.PackageActivated()),
+        safeQuery(c.filters.PackageTopup()),
+        safeQuery(c.filters.WithdrawalRequested(null, p.id, null, null, null, null)),
+        safeQuery(c.filters.WithdrawalApproved(null, p.id, null)),
+        safeQuery(c.filters.WithdrawRejected(null, p.id)),
+        safeQuery(c.filters.RankRewardPaid(p.id, null, null)),
+        safeQuery(c.filters.RoyaltyDistributed(p.id, null, null)),
+        safeQuery(c.filters.UserRegistered(null, null, p.id)),
+      ]);
+
+      const packageMeta = new Map<string, { block: number; tx: string }>();
+      for (const e of activated as any[]) {
+        const id = bn(e.args?.packageId ?? e.args?.[0]).toString();
+        packageMeta.set(id, { block: e.blockNumber, tx: e.transactionHash });
+      }
+      for (const e of topups as any[]) {
+        const id = bn(e.args?.packageId ?? e.args?.[0]).toString();
+        if (!packageMeta.has(id)) packageMeta.set(id, { block: e.blockNumber, tx: e.transactionHash });
+      }
+      for (const row of packageRows) {
+        const meta = packageMeta.get(row.packageId);
+        if (meta) { row.block = meta.block; row.tx = meta.tx; }
+      }
+
+      setPackages(packageRows.sort((a, b) => Number(b.packageId) - Number(a.packageId)));
+
+      // Automation diagnostics are read from contract storage.
+      try {
+        const [automationConfig, automationState, hasAutomationRole] = await Promise.all([
+          read.s_automationConfig(),
+          read.s_automationState(),
+          read.hasRole(AUTOMATION_ROLE, account),
+        ]);
+        const currentDay = Math.floor(Date.now() / 86400000);
+        const lastProcessingDay = bn(automationState.lastProcessingDay ?? automationState[2]);
+        setAutomationStatus({
+          enabled: Boolean(automationConfig.automationEnabled ?? automationConfig[1]),
+          hasRole: Boolean(hasAutomationRole),
+          batchSize: bn(automationConfig.batchSize ?? automationConfig[0]),
+          lastProcessingDay,
+          currentDay: ethers.BigNumber.from(currentDay),
+          processedToday: lastProcessingDay.eq(currentDay),
+        });
+      } catch {
+        setAutomationStatus(null);
+      }
+
+      const withdrawalMap = new Map<string, WithdrawalRow>();
+      for (const e of requested as any[]) {
+        const a = e.args;
+        const id = bn(a.requestId ?? a[0]).toString();
+        withdrawalMap.set(id, {
+          requestId: id,
+          walletType: Number(a.walletType ?? a[2]),
+          amount: bn(a.amount ?? a[3]),
+          fee: bn(a.fee ?? a[4]),
+          netAmount: bn(a.netAmount ?? a[5]),
+          block: e.blockNumber, tx: e.transactionHash, status: "PENDING",
+        });
+      }
+      for (const e of approved as any[]) {
+        const row = withdrawalMap.get(bn(e.args?.requestId ?? e.args?.[0]).toString());
+        if (row) row.status = "APPROVED";
+      }
+      for (const e of rejected as any[]) {
+        const row = withdrawalMap.get(bn(e.args?.requestId ?? e.args?.[0]).toString());
+        if (row) row.status = "REJECTED";
+      }
+      setWithdrawals(Array.from(withdrawalMap.values()).sort((a, b) => b.block - a.block));
+
+      setRankHistory((rankEvents as any[]).map(e => ({
+        rank: Number(e.args.rank ?? e.args[1]), reward: bn(e.args.reward ?? e.args[2]),
+        block: e.blockNumber, tx: e.transactionHash,
+      })).reverse());
+
+      setRoyaltyHistory((royaltyEvents as any[]).map(e => ({
+        level: Number(e.args.royaltyLevel ?? e.args[1]), amount: bn(e.args.amount ?? e.args[2]),
+        block: e.blockNumber, tx: e.transactionHash,
+      })).reverse());
+
+      // Direct team is sourced from direct-referral IDs, then each User struct is read on-chain.
+      const directIds = await read.getDirectReferrals(p.id);
+      const teamRows: TeamRow[] = [];
+      for (const rawId of directIds as any[]) {
+        const id = bn(rawId);
+        try {
+          const rawUser = await c.getUser(id);
+          teamRows.push({
+            id: id.toString(),
+            wallet: String(rawUser.wallet ?? rawUser[1]),
+            sponsorId: bn(rawUser.sponsorId ?? rawUser[2]).toString(),
+            status: Number(rawUser.status ?? rawUser[3] ?? 0),
+            directCount: Number(rawUser.directCount ?? rawUser[4] ?? 0),
+            activeDirectCount: Number(rawUser.activeDirectCount ?? rawUser[5] ?? 0),
+          });
+        } catch {}
+      }
+      setTeam(teamRows);
+    },
+    [account]
+  );
+
+  /* =======================================================
+     REFRESH DASHBOARD
+  ======================================================= */
+
+  const refresh =
+    useCallback(async () => {
+      if (!contract || !account) {
+        return;
+      }
+
+      setLoading(true);
+      setError("");
+
+      try {
+        await loadConfig(
+          contract
+        );
+
+        const registered =
+          await loadProfile(
+            contract,
+            account
+          );
+
+        const balance =
+          token
+            ? await token.balanceOf(
+                account
+              )
+            : ZERO;
+
+        setUsdtBalance(
+          bn(balance)
+        );
+
+        if (!registered) {
+          setPackages([]);
+          setWithdrawals([]);
+          setRankHistory([]);
+          setRoyaltyHistory([]);
+          setTeam([]);
+
+          return;
+        }
+
+        const raw =
+          await contract.myProfile();
+
+        const currentProfile: Profile =
+          {
+            id: bn(
+              raw.id ??
+                raw[0]
+            ),
+
+            wallet:
+              raw.wallet ??
+              raw[1],
+
+            sponsorId:
+              bn(
+                raw.sponsorId ??
+                  raw[2]
+              ),
+
+            status:
+              Number(
+                raw.status ??
+                  raw[3] ??
+                  0
+              ),
+
+            directCount:
+              Number(
+                raw.directCount ??
+                  raw[4] ??
+                  0
+              ),
+
+            activeDirectCount:
+              Number(
+                raw.activeDirectCount ??
+                  raw[5] ??
+                  0
+              ),
+
+            lifetimeBusiness:
+              bn(
+                raw.lifetimeBusiness ??
+                  raw[6]
+              ),
+
+            monthlyBusiness:
+              bn(
+                raw.monthlyBusiness ??
+                  raw[7]
+              ),
+
+            todayBusiness:
+              bn(
+                raw.todayBusiness ??
+                  raw[8]
+              ),
+
+            powerLegBusiness:
+              bn(
+                raw.powerLegBusiness ??
+                  raw[9]
+              ),
+
+            otherLegBusiness:
+              bn(
+                raw.otherLegBusiness ??
+                  raw[10]
+              ),
+
+            earningWallet:
+              bn(
+                raw.earningWallet ??
+                  raw[11]
+              ),
+
+            rankWallet:
+              bn(
+                raw.rankWallet ??
+                  raw[12]
+              ),
+
+            royaltyWallet:
+              bn(
+                raw.royaltyWallet ??
+                  raw[13]
+              ),
+
+            totalROIIncome:
+              bn(
+                raw.totalROIIncome ??
+                  raw[14]
+              ),
+
+            totalLevelIncome:
+              bn(
+                raw.totalLevelIncome ??
+                  raw[15]
+              ),
+
+            totalRankIncome:
+              bn(
+                raw.totalRankIncome ??
+                  raw[16]
+              ),
+
+            totalRoyaltyIncome:
+              bn(
+                raw.totalRoyaltyIncome ??
+                  raw[17]
+              ),
+
+            totalWithdrawn:
+              bn(
+                raw.totalWithdrawn ??
+                  raw[18]
+              ),
+
+            rank:
+              Number(
+                raw.rank ??
+                  raw[19] ??
+                  0
+              ),
+
+            royalty:
+              Number(
+                raw.royalty ??
+                  raw[20] ??
+                  0
+              ),
+          };
+
+        await loadEvents(
+          contract,
+          currentProfile
+        );
+      } catch (e: any) {
+        setError(
+          errorText(
+            e,
+            "Dashboard refresh failed."
+          )
+        );
+      } finally {
+        setLoading(false);
+      }
+    }, [
+      contract,
+      account,
+      token,
+      loadConfig,
+      loadProfile,
+      loadEvents,
+    ]);
 
   /* =======================================================
      CONNECT WALLET
@@ -889,357 +1104,209 @@ export default function DashboardPage() {
 
   const connectWallet =
     useCallback(async () => {
-      try {
-        setError("");
-        setInfo("");
-        setLoading(true);
-
-        if (!window.ethereum) {
-          throw new Error(
-            "MetaMask is not installed."
-          );
-        }
-
-        await ensureBscTestnet();
-
-        const web3 =
-          new ethers.providers.Web3Provider(
-            window.ethereum,
-            "any"
-          );
-
-        await web3.send(
-          "eth_requestAccounts",
-          []
-        );
-
-        const signer =
-          web3.getSigner();
-
-        const address =
-          await signer.getAddress();
-
-        const network =
-          await web3.getNetwork();
-
-        if (
-          network.chainId !==
-          BSC_TESTNET.chainId
-        ) {
-          throw new Error(
-            "Please switch to BSC Testnet."
-          );
-        }
-
-        const orbi =
-          getContract(signer);
-
-        const token =
-          getUSDTContract(signer);
-
-        setProvider(web3);
-        setAccount(address);
-        setContract(orbi);
-        setUsdt(token);
-      } catch (err: any) {
+      if (!window.ethereum) {
         setError(
-          err?.message ||
-            "Wallet connection failed."
-        );
-      } finally {
-        setLoading(false);
-      }
-    }, []);
-
-  /* =======================================================
-     LOAD PROFILE
-  ======================================================= */
-
-  const loadProfile =
-    useCallback(
-      async (
-        c: ethers.Contract,
-        wallet: string
-      ) => {
-        const registered =
-          await c.isRegistered(
-            wallet
-          );
-
-        if (!registered) {
-          setProfile(null);
-          setPackages([]);
-          setDirectUsers([]);
-          return false;
-        }
-
-        const raw =
-          await c.myProfile();
-
-        const parsed =
-          userFromTuple(raw);
-
-        setProfile(parsed);
-
-        return true;
-      },
-      []
-    );
-
-  /* =======================================================
-     LOAD PACKAGES
-     
-     NO EVENT SCANNING.
-     NO queryFilter.
-     NO PackageActivated.
-     NO PackageTopup.
-     NO PackageClosed.
-
-     SOURCE:
-       getUserPackages()
-       getActiveUserPackages()
-       getPackage()
-  ======================================================= */
-
-  const loadPackages =
-    useCallback(
-      async (
-        c: ethers.Contract,
-        userId: ethers.BigNumber
-      ) => {
-        const allRaw =
-          await c.getUserPackages(
-            userId
-          );
-
-        const activeRaw =
-          await c.getActiveUserPackages(
-            userId
-          );
-
-        const allIds: string[] =
-  (allRaw || []).map(
-    (id: any): string =>
-      bn(id).toString()
-  );
-
-const activeIds: string[] =
-  (activeRaw || []).map(
-    (id: any): string =>
-      bn(id).toString()
-  );
-
-const activeSet: Set<string> =
-  new Set<string>(activeIds);
-
-        const rows: PackageData[] = [];
-
-        for (const id of allIds) {
-          try {
-            const raw =
-              await c.getPackage(id);
-
-            const pkg =
-              packageFromTuple(
-                raw,
-                activeSet
-              );
-
-            if (pkg.exists) {
-              rows.push(pkg);
-            }
-          } catch (packageError) {
-            console.warn(
-              `Unable to read package ${id}`,
-              packageError
-            );
-          }
-        }
-
-        rows.sort(
-          (a, b) =>
-            Number(b.packageId) -
-            Number(a.packageId)
+          "Please install MetaMask."
         );
 
-        setPackages(rows);
-      },
-      []
-    );
-
-  /* =======================================================
-     LOAD DIRECT USERS
-  ======================================================= */
-
-  const loadDirectUsers =
-    useCallback(
-      async (
-        c: ethers.Contract,
-        userId: ethers.BigNumber
-      ) => {
-        try {
-          const raw =
-            await c.getDirectUsers(
-              userId
-            );
-
-          const users =
-            (raw || []).map(
-              (item: any) =>
-                directUserFromTuple(
-                  item
-                )
-            );
-
-          setDirectUsers(users);
-        } catch (err) {
-          console.warn(
-            "Direct users read failed:",
-            err
-          );
-
-          setDirectUsers([]);
-        }
-      },
-      []
-    );
-
-  /* =======================================================
-     LOAD ALL ON-CHAIN DATA
-  ======================================================= */
-
-  const loadDashboard =
-    useCallback(
-      async (
-        c: ethers.Contract,
-        wallet: string
-      ) => {
-        try {
-          setError("");
-
-          const registered =
-            await c.isRegistered(
-              wallet
-            );
-
-          if (!registered) {
-            setProfile(null);
-            setPackages([]);
-            setDirectUsers([]);
-            return;
-          }
-
-          const rawProfile =
-            await c.myProfile();
-
-          const parsed =
-            userFromTuple(
-              rawProfile
-            );
-
-          setProfile(parsed);
-
-          /*
-           * Direct package storage reads.
-           */
-          await loadPackages(
-            c,
-            parsed.id
-          );
-
-          /*
-           * Direct team read.
-           */
-          await loadDirectUsers(
-            c,
-            parsed.id
-          );
-        } catch (err: any) {
-          console.error(
-            "Dashboard load failed:",
-            err
-          );
-
-          setError(
-            err?.reason ||
-              err?.data?.message ||
-              err?.message ||
-              "Unable to read dashboard data from the contract."
-          );
-        }
-      },
-      [
-        loadPackages,
-        loadDirectUsers,
-      ]
-    );
-
-  /* =======================================================
-     INITIAL WALLET CHECK
-  ======================================================= */
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function init() {
-      if (
-        !window.ethereum
-      ) {
         return;
       }
 
+      setConnecting(true);
+      setError("");
+
       try {
-        const web3 =
+        await ensureBscTestnet();
+
+        await window.ethereum.request({
+          method:
+            "eth_requestAccounts",
+        });
+
+        const web3Provider =
           new ethers.providers.Web3Provider(
             window.ethereum,
             "any"
           );
 
-        const accounts =
-          await web3.listAccounts();
-
-        if (
-          !mounted ||
-          accounts.length === 0
-        ) {
-          return;
-        }
-
-        const network =
-          await web3.getNetwork();
-
-        if (
-          network.chainId !==
-          BSC_TESTNET.chainId
-        ) {
-          return;
-        }
-
-        const signer =
-          web3.getSigner();
+        const web3Signer =
+          web3Provider.getSigner();
 
         const address =
-          accounts[0];
+          await web3Signer.getAddress();
 
-        setProvider(web3);
-        setAccount(address);
+        const orbiContract =
+          getContract(
+            web3Signer
+          );
+
+        const usdtContract =
+          getUSDTContract(
+            web3Provider
+          );
+
+        setProvider(
+          web3Provider
+        );
+
+        setSigner(
+          web3Signer
+        );
+
         setContract(
-          getContract(signer)
+          orbiContract
         );
-        setUsdt(
-          getUSDTContract(signer)
+
+        setToken(
+          usdtContract
         );
-      } catch {
-        // Wallet can remain disconnected.
+
+        setAccount(
+          address
+        );
+
+        await loadConfig(
+          orbiContract
+        );
+
+        /*
+         * Check registration.
+         */
+        let registered =
+          await orbiContract.isRegistered(
+            address
+          );
+
+        /*
+         * =================================================
+         * ROOT / OWNER AUTO REGISTRATION
+         *
+         * Contract constructor grants DEFAULT_ADMIN_ROLE
+         * to deployer but does NOT create a User.
+         *
+         * First admin wallet is therefore registered here
+         * as root with sponsor = zero address.
+         * =================================================
+         */
+
+        if (!registered) {
+          const accessControl =
+            new ethers.Contract(
+              CONTRACT_ADDRESS,
+              ACCESS_CONTROL_ABI,
+              web3Provider
+            );
+
+          const isAdmin =
+            await accessControl.hasRole(
+              DEFAULT_ADMIN_ROLE,
+              address
+            );
+
+          const stats =
+            await orbiContract.s_systemStats();
+
+          const totalUsers =
+            bn(
+              stats.totalUsers ??
+                stats[0]
+            );
+
+          const params =
+            new URLSearchParams(
+              window.location.search
+            );
+
+          const referral =
+            params.get("ref");
+
+          /*
+           * OWNER / ROOT
+           */
+          if (
+            isAdmin &&
+            totalUsers.isZero()
+          ) {
+            notify(
+              "Initializing ORBI root account..."
+            );
+
+            const tx =
+              await orbiContract
+                .connect(
+                  web3Signer
+                )
+                .registerOnly(
+                  ethers.constants
+                    .AddressZero
+                );
+
+            await tx.wait();
+
+            registered = true;
+
+            notify(
+              "Root account registered successfully."
+            );
+          }
+
+          /*
+           * NORMAL USER WITH REFERRAL LINK
+           */
+          else if (
+            referral &&
+            ethers.utils.isAddress(
+              referral
+            )
+          ) {
+            notify(
+              "Referral detected. Confirm registration in MetaMask..."
+            );
+
+            const tx =
+              await orbiContract
+                .connect(
+                  web3Signer
+                )
+                .registerOnly(
+                  referral
+                );
+
+            await tx.wait();
+
+            registered = true;
+
+            notify(
+              "Registration successful. Welcome to ORBIWORLD."
+            );
+          }
+        }
+
+        /*
+         * If no referral exists, DO NOT show
+         * old Account Registration form.
+         */
+        if (!registered) {
+          notify(
+            "Wallet connected. Open a valid ORBI referral link to register."
+          );
+        }
+      } catch (e: any) {
+        console.error(e);
+
+        setError(
+          errorText(
+            e,
+            "Wallet connection failed."
+          )
+        );
+      } finally {
+        setConnecting(false);
       }
-    }
-
-    init();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    }, [
+      loadConfig,
+      notify,
+    ]);
 
   /* =======================================================
      WALLET EVENTS
@@ -1250,599 +1317,417 @@ const activeSet: Set<string> =
       return;
     }
 
-    const handleAccounts =
-      (accounts: string[]) => {
+    const onAccountsChanged =
+      (
+        accounts: string[]
+      ) => {
         if (
-          !accounts ||
-          accounts.length === 0
+          !accounts.length
         ) {
-          setAccount("");
-          setProfile(null);
-          setPackages([]);
-          setDirectUsers([]);
-          return;
+          clearState();
+        } else {
+          connectWallet().catch(
+            () => {}
+          );
         }
-
-        const next =
-          accounts[0];
-
-        setAccount(next);
       };
 
-    const handleChain = () => {
-      window.location.reload();
-    };
+    const onChainChanged =
+      () => {
+        window.location.reload();
+      };
 
-    window.ethereum.on(
+    window.ethereum.on?.(
       "accountsChanged",
-      handleAccounts
+      onAccountsChanged
     );
 
-    window.ethereum.on(
+    window.ethereum.on?.(
       "chainChanged",
-      handleChain
+      onChainChanged
     );
 
     return () => {
-      window.ethereum.removeListener(
+      window.ethereum.removeListener?.(
         "accountsChanged",
-        handleAccounts
+        onAccountsChanged
       );
 
-      window.ethereum.removeListener(
+      window.ethereum.removeListener?.(
         "chainChanged",
-        handleChain
+        onChainChanged
       );
     };
-  }, []);
+  }, [
+    connectWallet,
+    clearState,
+  ]);
 
   /* =======================================================
-     REFRESH WHEN CONTRACT IS READY
+     REFRESH AFTER CONNECT
   ======================================================= */
 
   useEffect(() => {
-  if (!contract || !account) {
-    return;
-  }
-
-  const currentContract: ethers.Contract =
-    contract;
-
-  const currentAccount: string =
-    account;
-
-  let cancelled = false;
-
-  async function run() {
-    setLoading(true);
-
-    try {
-      if (!cancelled) {
-        await loadDashboard(
-          currentContract,
-          currentAccount
-        );
-      }
-    } finally {
-      if (!cancelled) {
-        setLoading(false);
-      }
+    if (
+      account &&
+      contract
+    ) {
+      refresh();
     }
-  }
-
-  run();
-
-  return () => {
-    cancelled = true;
-  };
-}, [
-  contract,
-  account,
-  loadDashboard,
-]);
+  }, [
+    account,
+    contract,
+    refresh,
+  ]);
 
   /* =======================================================
-     REGISTER
+     DISCONNECT
   ======================================================= */
 
-  const register =
-    useCallback(
-      async (
-        sponsorWallet: string
-      ) => {
-        if (!contract) {
-          return;
-        }
-
-        try {
-          setTxBusy(true);
-          setError("");
-          setInfo("");
-
-          if (
-            !ethers.utils.isAddress(
-              sponsorWallet
-            )
-          ) {
-            throw new Error(
-              "Invalid sponsor wallet address."
-            );
-          }
-
-          const tx =
-            await contract.registerOnly(
-              sponsorWallet
-            );
-
-          setInfo(
-            "Registration transaction submitted. Waiting for confirmation..."
-          );
-
-          await tx.wait();
-
-          setInfo(
-            "Registration successful."
-          );
-
-          await loadDashboard(
-            contract,
-            account
-          );
-        } catch (err: any) {
-          setError(
-            err?.reason ||
-              err?.data?.message ||
-              err?.message ||
-              "Registration failed."
-          );
-        } finally {
-          setTxBusy(false);
-        }
-      },
-      [
-        contract,
-        account,
-        loadDashboard,
-      ]
-    );
+  function disconnectWallet() {
+    clearState();
+    setSection("overview");
+  }
 
   /* =======================================================
      APPROVE USDT
   ======================================================= */
 
-  const approveUSDT =
-    useCallback(
-      async (
-        amount: ethers.BigNumber
-      ) => {
-        if (!usdt) {
-          throw new Error(
-            "USDT contract is not connected."
-          );
-        }
+  async function approveIfNeeded(
+    amount: ethers.BigNumber
+  ) {
+    if (
+      !token ||
+      !signer ||
+      !account
+    ) {
+      throw new Error(
+        "Wallet not connected."
+      );
+    }
 
-        const allowance =
-          await usdt.allowance(
-            account,
-            CONTRACT_ADDRESS
-          );
+    const allowance =
+      bn(
+        await token.allowance(
+          account,
+          CONTRACT_ADDRESS
+        )
+      );
 
-        if (
-          allowance.gte(amount)
-        ) {
-          return;
-        }
+    if (
+      allowance.gte(amount)
+    ) {
+      return;
+    }
 
-        setInfo(
-          "Approving USDT..."
-        );
-
-        const tx =
-          await usdt.approve(
-            CONTRACT_ADDRESS,
-            amount
-          );
-
-        await tx.wait();
-
-        setInfo(
-          "USDT approval confirmed."
-        );
-      },
-      [
-        usdt,
-        account,
-      ]
-    );
-
-  /* =======================================================
-     FIRST STAKE
-  ======================================================= */
-
-  const activate =
-    useCallback(async () => {
-      if (
-        !contract ||
-        !usdt
-      ) {
-        return;
-      }
-
-      try {
-        setTxBusy(true);
-        setError("");
-        setInfo("");
-
-        if (!stakeAmount) {
-          throw new Error(
-            "Enter stake amount."
-          );
-        }
-
-        const amount =
-          parseUSDT(
-            stakeAmount
-          );
-
-        await approveUSDT(
+    const tx =
+      await token
+        .connect(signer)
+        .approve(
+          CONTRACT_ADDRESS,
           amount
         );
 
-        setInfo(
-          "Activating account..."
+    notify(
+      "USDT approval submitted..."
+    );
+
+    await tx.wait();
+  }
+
+  /* =======================================================
+     ACTIVATE PACKAGE
+  ======================================================= */
+
+  async function activatePackage() {
+    if (
+      !contract ||
+      !token ||
+      !signer
+    ) {
+      return;
+    }
+
+    try {
+      const amount =
+        units(
+          stakeAmount
         );
 
-        const tx =
-          await contract.activateAccount(
+      if (
+        amount.lt(
+          config.minStake
+        )
+      ) {
+        throw new Error(
+          `Minimum stake is ${money(
+            config.minStake
+          )} USDT.`
+        );
+      }
+
+      setBusy(true);
+
+      await approveIfNeeded(
+        amount
+      );
+
+      const tx =
+        await contract
+          .connect(signer)
+          .activateAccount(
             amount
           );
 
-        await tx.wait();
+      notify(
+        "Package activation submitted..."
+      );
 
-        setInfo(
-          "Package activated successfully."
-        );
+      await tx.wait();
 
-        setStakeAmount("");
+      setStakeAmount("");
 
-        await loadDashboard(
-          contract,
-          account
-        );
-      } catch (err: any) {
-        setError(
-          err?.reason ||
-            err?.data?.message ||
-            err?.message ||
-            "Activation failed."
-        );
-      } finally {
-        setTxBusy(false);
-      }
-    }, [
-      contract,
-      usdt,
-      stakeAmount,
-      approveUSDT,
-      account,
-      loadDashboard,
-    ]);
+      notify(
+        "Package activated successfully."
+      );
+
+      await refresh();
+    } catch (e: any) {
+      setError(
+        errorText(
+          e,
+          "Activation failed."
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /* =======================================================
      TOP UP
   ======================================================= */
 
-  const topUp =
-    useCallback(async () => {
+  async function topUpPackage() {
+    if (
+      !contract ||
+      !token ||
+      !signer
+    ) {
+      return;
+    }
+
+    try {
+      const amount =
+        units(
+          stakeAmount
+        );
+
       if (
-        !contract ||
-        !usdt
+        amount.lt(
+          config.minTopup
+        )
       ) {
-        return;
+        throw new Error(
+          `Minimum top-up is ${money(
+            config.minTopup
+          )} USDT.`
+        );
       }
 
-      try {
-        setTxBusy(true);
-        setError("");
-        setInfo("");
+      setBusy(true);
 
-        if (!stakeAmount) {
-          throw new Error(
-            "Enter top-up amount."
-          );
-        }
+      await approveIfNeeded(
+        amount
+      );
 
-        const amount =
-          parseUSDT(
-            stakeAmount
-          );
-
-        await approveUSDT(
-          amount
-        );
-
-        setInfo(
-          "Creating top-up package..."
-        );
-
-        const tx =
-          await contract.topUp(
+      const tx =
+        await contract
+          .connect(signer)
+          .topUp(
             amount
           );
 
-        await tx.wait();
+      notify(
+        "Top-up submitted..."
+      );
 
-        setInfo(
-          "Top-up package created successfully."
-        );
+      await tx.wait();
 
-        setStakeAmount("");
+      setStakeAmount("");
 
-        await loadDashboard(
-          contract,
-          account
-        );
-      } catch (err: any) {
-        setError(
-          err?.reason ||
-            err?.data?.message ||
-            err?.message ||
-            "Top-up failed."
-        );
-      } finally {
-        setTxBusy(false);
-      }
-    }, [
-      contract,
-      usdt,
-      stakeAmount,
-      approveUSDT,
-      account,
-      loadDashboard,
-    ]);
+      notify(
+        "Top-up successful."
+      );
+
+      await refresh();
+    } catch (e: any) {
+      setError(
+        errorText(
+          e,
+          "Top-up failed."
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /* =======================================================
-     WITHDRAW
+     WITHDRAWAL
   ======================================================= */
 
-  const withdraw =
-    useCallback(async () => {
-      if (!contract) {
-        return;
-      }
+  async function requestWithdrawal() {
+    if (
+      !contract ||
+      !signer ||
+      !profile
+    ) {
+      return;
+    }
 
-      try {
-        setTxBusy(true);
-        setError("");
-        setInfo("");
-
-        if (!withdrawAmount) {
-          throw new Error(
-            "Enter withdrawal amount."
-          );
-        }
-
-        const amount =
-          parseUSDT(
-            withdrawAmount
-          );
-
-        setInfo(
-          "Submitting withdrawal request..."
+    try {
+      const amount =
+        units(
+          withdrawAmount
         );
 
-        const tx =
-          await contract.requestWithdraw(
+      if (
+        amount.lt(
+          config.minWithdrawal
+        )
+      ) {
+        throw new Error(
+          `Minimum withdrawal is ${money(
+            config.minWithdrawal
+          )} USDT.`
+        );
+      }
+
+      const available =
+        withdrawWallet ===
+        WalletType.EARNING
+          ? profile.earningWallet
+          : withdrawWallet ===
+            WalletType.RANK
+          ? profile.rankWallet
+          : profile.royaltyWallet;
+
+      if (
+        amount.gt(
+          available
+        )
+      ) {
+        throw new Error(
+          "Insufficient selected wallet balance."
+        );
+      }
+
+      setBusy(true);
+
+      const tx =
+        await contract
+          .connect(signer)
+          .requestWithdraw(
             withdrawWallet,
             amount
           );
 
-        await tx.wait();
+      notify(
+        "Withdrawal request submitted..."
+      );
 
-        setInfo(
-          "Withdrawal request submitted successfully."
-        );
+      await tx.wait();
 
-        setWithdrawAmount("");
+      setWithdrawAmount("");
 
-        await loadDashboard(
-          contract,
-          account
-        );
-      } catch (err: any) {
-        setError(
-          err?.reason ||
-            err?.data?.message ||
-            err?.message ||
-            "Withdrawal failed."
-        );
-      } finally {
-        setTxBusy(false);
-      }
-    }, [
-      contract,
-      withdrawAmount,
-      withdrawWallet,
-      account,
-      loadDashboard,
-    ]);
+      notify(
+        "Withdrawal request created successfully."
+      );
+
+      await refresh();
+    } catch (e: any) {
+      setError(
+        errorText(
+          e,
+          "Withdrawal request failed."
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /* =======================================================
-     DERIVED DATA
+     EMERGENCY CAPITAL WITHDRAWAL
   ======================================================= */
 
-  const activePackages =
-    useMemo(
-      () =>
-        packages.filter(
-          (pkg) =>
-            pkg.active &&
-            pkg.status ===
-              PackageStatus.ACTIVE
-        ),
-      [packages]
-    );
+  async function emergencyCapitalWithdraw() {
+    if (
+      !contract ||
+      !signer
+    ) {
+      return;
+    }
 
-  const closedPackages =
-    useMemo(
-      () =>
-        packages.filter(
-          (pkg) =>
-            !pkg.active ||
-            pkg.status !==
-              PackageStatus.ACTIVE
-        ),
-      [packages]
-    );
+    const confirmed =
+      window.confirm(
+        "Emergency Capital Withdrawal permanently closes your active packages and puts your account into Emergency Exit. Continue?"
+      );
 
-  const totalStaked =
-    useMemo(
-      () =>
-        packages.reduce(
-          (sum, pkg) =>
-            sum.add(pkg.amount),
-          ZERO
-        ),
-      [packages]
-    );
+    if (!confirmed) {
+      return;
+    }
 
-  const activeCapital =
-    useMemo(
-      () =>
-        activePackages.reduce(
-          (sum, pkg) =>
-            sum.add(pkg.amount),
-          ZERO
-        ),
-      [activePackages]
-    );
+    try {
+      setBusy(true);
 
-  const totalPackageROI =
-    useMemo(
-      () =>
-        packages.reduce(
-          (sum, pkg) =>
-            sum.add(pkg.roiPaid),
-          ZERO
-        ),
-      [packages]
-    );
+      const tx =
+        await contract
+          .connect(signer)
+          .emergencyCapitalWithdraw();
 
-  const activePackage =
-    activePackages[0] ||
-    null;
+      notify(
+        "Emergency withdrawal submitted..."
+      );
+
+      await tx.wait();
+
+      notify(
+        "Emergency Capital Withdrawal completed."
+      );
+
+      await refresh();
+    } catch (e: any) {
+      setError(
+        errorText(
+          e,
+          "Emergency Capital Withdrawal failed."
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /* =======================================================
-     NAVIGATION
-  ======================================================= */
-
-  const navigation: {
-    id: Section;
-    label: string;
-    icon: string;
-  }[] = [
-    {
-      id: "overview",
-      label: "Overview",
-      icon: "⌂",
-    },
-    {
-      id: "packages",
-      label: "My Packages",
-      icon: "◈",
-    },
-    {
-      id: "business",
-      label: "Business",
-      icon: "◎",
-    },
-    {
-      id: "earnings",
-      label: "Earnings",
-      icon: "$",
-    },
-    {
-      id: "referral",
-      label: "Referral",
-      icon: "↗",
-    },
-    {
-      id: "withdrawal",
-      label: "Withdrawal",
-      icon: "↙",
-    },
-    {
-      id: "profile",
-      label: "Profile",
-      icon: "●",
-    },
-  ];
-
-  /* =======================================================
-     DISCONNECTED
+     LOGIN
   ======================================================= */
 
   if (!account) {
     return (
       <>
-        <style jsx global>{GLOBAL_CSS}</style>
-
         <LoginScreen
-          onConnect={connectWallet}
-          busy={loading}
+          connect={connectWallet}
+          busy={connecting}
           error={error}
         />
+
+        <style jsx global>
+          {styles}
+        </style>
       </>
     );
-  }
-
-  /* =======================================================
-     REGISTERED CHECK
-  ======================================================= */
-
-  if (
-    !profile &&
-    !loading
-  ) {
-    return (
-      <>
-        <style jsx global>{GLOBAL_CSS}</style>
-
-        <RegistrationScreen
-          account={account}
-          onRegister={register}
-          busy={txBusy}
-          error={error}
-        />
-      </>
-    );
-  }
-
-  /* =======================================================
-     LOADING
-  ======================================================= */
-
-  if (
-    loading &&
-    !profile
-  ) {
-    return (
-      <>
-        <style jsx global>{GLOBAL_CSS}</style>
-
-        <main className="loadingPage">
-          <div className="loader" />
-          <p>
-            Reading ORBI data
-            from blockchain...
-          </p>
-        </main>
-      </>
-    );
-  }
-
-  if (!profile) {
-    return null;
   }
 
   /* =======================================================
@@ -1850,2438 +1735,3487 @@ const activeSet: Set<string> =
   ======================================================= */
 
   return (
-    <>
-      <style jsx global>
-        {GLOBAL_CSS}
-      </style>
+    <div className="shell">
+      {/* SIDEBAR */}
 
-      <div className="appShell">
-        {/* MOBILE OVERLAY */}
-        {mobileOpen && (
-          <div
-            className="mobileOverlay"
-            onClick={() =>
-              setMobileOpen(false)
-            }
+      <aside
+        className={`sidebar ${
+          mobileOpen
+            ? "open"
+            : ""
+        }`}
+      >
+        <div className="brand">
+          <img
+            src="/orbi-logo.png"
+            alt="ORBI"
           />
-        )}
 
-        {/* SIDEBAR */}
-        <aside
-          className={`sidebar ${
-            mobileOpen
-              ? "sidebarOpen"
-              : ""
-          }`}
+          <div>
+            <b>ORBIWORLD</b>
+            <small>
+              WORLD DASHBOARD
+            </small>
+          </div>
+        </div>
+
+        <button
+          className="mobileClose"
+          onClick={() =>
+            setMobileOpen(false)
+          }
         >
-          <div className="brand">
-            <img
-              src="/orbi-logo.png"
-              alt="ORBI"
-            />
+          ×
+        </button>
 
-            <div>
-              <strong>
-                ORBI
-              </strong>
-
-              <span>
-                WORLD
-              </span>
-            </div>
+        <nav>
+          <div className="navTitle">
+            MAIN
           </div>
 
-          <div className="walletMini">
+          {MAIN_NAV.map(
+            (item) => (
+              <NavButton
+                key={item.id}
+                label={item.label}
+                icon={item.icon}
+                active={
+                  section ===
+                  item.id
+                }
+                onClick={() => {
+                  setSection(
+                    item.id
+                  );
+
+                  setMobileOpen(
+                    false
+                  );
+                }}
+              />
+            )
+          )}
+
+          <button
+            className="navGroupButton"
+            onClick={() =>
+              setHistoryOpen(
+                (value) =>
+                  !value
+              )
+            }
+          >
             <span>
-              CONNECTED
+              HISTORY
             </span>
 
-            <code>
-              {shortAddress(
-                account
-              )}
-            </code>
-          </div>
+            <span>
+              {historyOpen
+                ? "⌃"
+                : "⌄"}
+            </span>
+          </button>
 
-          <nav className="nav">
-            {navigation.map(
+          {historyOpen &&
+            HISTORY_NAV.map(
               (item) => (
-                <button
-                  key={item.id}
-                  className={`navButton ${
+                <NavButton
+                  key={
+                    item.id
+                  }
+                  label={
+                    item.label
+                  }
+                  icon="▤"
+                  active={
                     section ===
                     item.id
-                      ? "selected"
-                      : ""
-                  }`}
+                  }
                   onClick={() => {
                     setSection(
                       item.id
                     );
+
                     setMobileOpen(
                       false
                     );
                   }}
-                >
-                  <span className="navIcon">
-                    {item.icon}
-                  </span>
-
-                  <span>
-                    {item.label}
-                  </span>
-                </button>
+                />
               )
             )}
-          </nav>
 
-          <div className="sidebarBottom">
-            <a
-              href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
-              target="_blank"
-              rel="noreferrer"
-              className="contractLink"
-            >
-              View Contract ↗
-            </a>
+          <NavButton
+            label="Profile"
+            icon="◉"
+            active={
+              section ===
+              "profile"
+            }
+            onClick={() => {
+              setSection(
+                "profile"
+              );
 
-            <div className="networkPill">
-              ● BSC Testnet
-            </div>
+              setMobileOpen(
+                false
+              );
+            }}
+          />
+        </nav>
+
+        <a
+          className="sideLink"
+          href={addressUrl(
+            CONTRACT_ADDRESS
+          )}
+          target="_blank"
+          rel="noreferrer"
+        >
+          View Contract ↗
+        </a>
+      </aside>
+
+      {/* MAIN */}
+
+      <main className="main">
+        <header className="topbar">
+          <button
+            className="mobileMenu"
+            onClick={() =>
+              setMobileOpen(true)
+            }
+          >
+            ☰
+          </button>
+
+          <div>
+            <span className="eyebrow">
+              ORBIWORLD • BSC TESTNET
+            </span>
+
+            <h1>
+              {titleFor(
+                section
+              )}
+            </h1>
+
+            <p>
+              Decentralized
+              ecosystem
+              dashboard
+            </p>
           </div>
-        </aside>
 
-        {/* MAIN */}
-        <main className="main">
-          {/* HEADER */}
-          <header className="header">
+          <div className="walletActions">
+            <div className="walletChip">
+              <i />
+              {shortAddress(
+                account
+              )}
+            </div>
+
             <button
-              className="menuButton"
-              onClick={() =>
-                setMobileOpen(
-                  !mobileOpen
-                )
+              className="secondary"
+              onClick={
+                refresh
+              }
+              disabled={
+                loading
               }
             >
-              ☰
+              {loading
+                ? "Syncing..."
+                : "Refresh"}
             </button>
 
-            <div>
-              <span className="headerEyebrow">
-                ORBIWORLD
-              </span>
-
-              <h1>
-                {section ===
-                  "overview" &&
-                  "Dashboard Overview"}
-
-                {section ===
-                  "packages" &&
-                  "My Packages"}
-
-                {section ===
-                  "business" &&
-                  "Business Center"}
-
-                {section ===
-                  "earnings" &&
-                  "Earnings"}
-
-                {section ===
-                  "referral" &&
-                  "Referral Center"}
-
-                {section ===
-                  "withdrawal" &&
-                  "Withdrawal"}
-
-                {section ===
-                  "profile" &&
-                  "My Profile"}
-              </h1>
-            </div>
-
-            <div className="headerActions">
-              <button
-                className="refreshButton"
-                disabled={
-                  loading
-                }
-                onClick={async () => {
-                  if (!contract) {
-                    return;
-                  }
-
-                  setLoading(true);
-
-                  try {
-                    await loadDashboard(
-                      contract,
-                      account
-                    );
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-              >
-                ↻ Refresh
-              </button>
-
-              <div className="accountChip">
-                <span className="onlineDot" />
-                {shortAddress(
-                  account
-                )}
-              </div>
-            </div>
-          </header>
-
-          {/* NOTICES */}
-          {(error || info) && (
-            <div className="noticeWrap">
-              {error && (
-                <div className="errorBox">
-                  {error}
-                </div>
-              )}
-
-              {info && (
-                <div className="infoBox">
-                  {info}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* =================================================
-              OVERVIEW
-          ================================================= */}
-          {section ===
-            "overview" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="ACCOUNT"
-                title={`Welcome, User #${profile.id.toString()}`}
-                description="Live account information read directly from the ORBI smart contract."
-              />
-
-              <div className="statsGrid">
-                <StatCard
-                  label="Active Packages"
-                  value={activePackages.length.toString()}
-                  sub={`of ${packages.length} total`}
-                />
-
-                <StatCard
-                  label="Active Capital"
-                  value={`$${formatUSDT(
-                    activeCapital
-                  )}`}
-                  sub="On-chain"
-                />
-
-                <StatCard
-                  label="ROI Income"
-                  value={`$${formatUSDT(
-                    profile.totalROIIncome
-                  )}`}
-                  sub="Lifetime"
-                />
-
-                <StatCard
-                  label="Level Income"
-                  value={`$${formatUSDT(
-                    profile.totalLevelIncome
-                  )}`}
-                  sub="Lifetime"
-                />
-              </div>
-
-              <div className="overviewGrid">
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        ACTIVE PACKAGE
-                      </span>
-
-                      <h3>
-                        Current Staking
-                      </h3>
-                    </div>
-
-                    <button
-                      className="textButton"
-                      onClick={() =>
-                        setSection(
-                          "packages"
-                        )
-                      }
-                    >
-                      View All →
-                    </button>
-                  </div>
-
-                  {activePackage ? (
-                    <PackageCard
-                      pkg={
-                        activePackage
-                      }
-                    />
-                  ) : (
-                    <EmptyState
-                      title="No active package"
-                      description="No package with ACTIVE status is currently present in the active package list."
-                    />
-                  )}
-                </div>
-
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        ACCOUNT STATUS
-                      </span>
-
-                      <h3>
-                        On-chain Profile
-                      </h3>
-                    </div>
-                  </div>
-
-                  <div className="profileSummary">
-                    <div>
-                      <span>
-                        Status
-                      </span>
-
-                      <strong className="greenText">
-                        {statusLabel(
-                          profile.status
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        User ID
-                      </span>
-
-                      <strong>
-                        #
-                        {profile.id.toString()}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Sponsor
-                      </span>
-
-                      <strong>
-                        #
-                        {profile.sponsorId.toString()}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Directs
-                      </span>
-
-                      <strong>
-                        {
-                          profile.directCount
-                        }
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Active Directs
-                      </span>
-
-                      <strong>
-                        {
-                          profile.activeDirectCount
-                        }
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Rank
-                      </span>
-
-                      <strong>
-                        R{profile.rank}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="statsGrid">
-                <StatCard
-                  label="Lifetime Business"
-                  value={`$${formatUSDT(
-                    profile.lifetimeBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Monthly Business"
-                  value={`$${formatUSDT(
-                    profile.monthlyBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Today Business"
-                  value={`$${formatUSDT(
-                    profile.todayBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Total Withdrawn"
-                  value={`$${formatUSDT(
-                    profile.totalWithdrawn
-                  )}`}
-                />
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              PACKAGES
-          ================================================= */}
-          {section ===
-            "packages" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="STAKING"
-                title="My Packages"
-                description="Complete staking history and current active packages from contract storage."
-              />
-
-              <div className="statsGrid">
-                <StatCard
-                  label="Total Packages"
-                  value={packages.length.toString()}
-                />
-
-                <StatCard
-                  label="Active"
-                  value={activePackages.length.toString()}
-                />
-
-                <StatCard
-                  label="Closed"
-                  value={closedPackages.length.toString()}
-                />
-
-                <StatCard
-                  label="Total Staked"
-                  value={`$${formatUSDT(
-                    totalStaked
-                  )}`}
-                />
-              </div>
-
-              <div className="packageToolbar">
-                <div>
-                  <strong>
-                    Active Packages
-                  </strong>
-
-                  <span>
-                    {activePackages.length} on-chain
-                  </span>
-                </div>
-              </div>
-
-              {activePackages.length >
-              0 ? (
-                <div className="packageList">
-                  {activePackages.map(
-                    (pkg) => (
-                      <PackageCard
-                        key={
-                          pkg.packageId
-                        }
-                        pkg={pkg}
-                      />
-                    )
-                  )}
-                </div>
-              ) : (
-                <EmptyState
-                  title="No active packages"
-                  description="The contract returned no active package IDs for this user."
-                />
-              )}
-
-              <div className="historyHeading">
-                <h3>
-                  Staking History
-                </h3>
-
-                <span>
-                  {packages.length} packages
-                </span>
-              </div>
-
-              {packages.length >
-              0 ? (
-                <div className="packageList">
-                  {packages.map(
-                    (pkg) => (
-                      <PackageCard
-                        key={
-                          `history-${pkg.packageId}`
-                        }
-                        pkg={pkg}
-                      />
-                    )
-                  )}
-                </div>
-              ) : (
-                <EmptyState
-                  title="No staking history"
-                  description="No package IDs were returned by getUserPackages()."
-                />
-              )}
-            </section>
-          )}
-
-          {/* =================================================
-              BUSINESS
-          ================================================= */}
-          {section ===
-            "business" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="NETWORK"
-                title="Business Center"
-                description="Business figures are read from the user's on-chain profile."
-              />
-
-              <div className="statsGrid">
-                <StatCard
-                  label="Lifetime Business"
-                  value={`$${formatUSDT(
-                    profile.lifetimeBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Monthly Business"
-                  value={`$${formatUSDT(
-                    profile.monthlyBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Today Business"
-                  value={`$${formatUSDT(
-                    profile.todayBusiness
-                  )}`}
-                />
-
-                <StatCard
-                  label="Direct Users"
-                  value={profile.directCount.toString()}
-                />
-              </div>
-
-              <div className="businessGrid">
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        LEGS
-                      </span>
-
-                      <h3>
-                        Business Distribution
-                      </h3>
-                    </div>
-                  </div>
-
-                  <div className="businessRows">
-                    <div>
-                      <span>
-                        Power Leg
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.powerLegBusiness
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Other Leg
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.otherLegBusiness
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Active Directs
-                      </span>
-
-                      <strong>
-                        {
-                          profile.activeDirectCount
-                        }
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Total Directs
-                      </span>
-
-                      <strong>
-                        {
-                          profile.directCount
-                        }
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        TEAM
-                      </span>
-
-                      <h3>
-                        Direct Team
-                      </h3>
-                    </div>
-
-                    <button
-                      className="textButton"
-                      onClick={() =>
-                        setSection(
-                          "referral"
-                        )
-                      }
-                    >
-                      Open →
-                    </button>
-                  </div>
-
-                  {directUsers.length >
-                  0 ? (
-                    <div className="teamMiniList">
-                      {directUsers
-                        .slice(
-                          0,
-                          5
-                        )
-                        .map(
-                          (
-                            user
-                          ) => (
-                            <div
-                              className="teamMini"
-                              key={
-                                user.id
-                              }
-                            >
-                              <div className="avatar">
-                                {user.id}
-                              </div>
-
-                              <div>
-                                <strong>
-                                  User #
-                                  {
-                                    user.id
-                                  }
-                                </strong>
-
-                                <span>
-                                  {
-                                    shortAddress(
-                                      user.wallet
-                                    )
-                                  }
-                                </span>
-                              </div>
-
-                              <b>
-                                {statusLabel(
-                                  user.status
-                                )}
-                              </b>
-                            </div>
-                          )
-                        )}
-                    </div>
-                  ) : (
-                    <EmptyState
-                      title="No direct users"
-                      description="The contract returned an empty direct-user list."
-                    />
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              EARNINGS
-          ================================================= */}
-          {section ===
-            "earnings" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="INCOME"
-                title="Earnings"
-                description="Lifetime income totals stored in your ORBI profile."
-              />
-
-              <div className="statsGrid">
-                <StatCard
-                  label="ROI Income"
-                  value={`$${formatUSDT(
-                    profile.totalROIIncome
-                  )}`}
-                />
-
-                <StatCard
-                  label="Level Income"
-                  value={`$${formatUSDT(
-                    profile.totalLevelIncome
-                  )}`}
-                />
-
-                <StatCard
-                  label="Rank Income"
-                  value={`$${formatUSDT(
-                    profile.totalRankIncome
-                  )}`}
-                />
-
-                <StatCard
-                  label="Royalty Income"
-                  value={`$${formatUSDT(
-                    profile.totalRoyaltyIncome
-                  )}`}
-                />
-              </div>
-
-              <div className="panel">
-                <div className="panelHeader">
-                  <div>
-                    <span className="panelEyebrow">
-                      LEVEL PLAN
-                    </span>
-
-                    <h3>
-                      Level Income
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="levelGrid">
-                  {LEVEL_PERCENTAGES.map(
-                    (
-                      percentage,
-                      index
-                    ) => (
-                      <div
-                        className="levelCard"
-                        key={
-                          index
-                        }
-                      >
-                        <span>
-                          Level{" "}
-                          {index + 1}
-                        </span>
-
-                        <strong>
-                          {percentage}%
-                        </strong>
-                      </div>
-                    )
-                  )}
-                </div>
-              </div>
-
-              <div className="panel">
-                <div className="panelHeader">
-                  <div>
-                    <span className="panelEyebrow">
-                      PACKAGE ROI
-                    </span>
-
-                    <h3>
-                      Package ROI Summary
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="businessRows">
-                  <div>
-                    <span>
-                      Package ROI Paid
-                    </span>
-
-                    <strong>
-                      $
-                      {formatUSDT(
-                        totalPackageROI
-                      )}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>
-                      Profile ROI Income
-                    </span>
-
-                    <strong>
-                      $
-                      {formatUSDT(
-                        profile.totalROIIncome
-                      )}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              REFERRAL
-          ================================================= */}
-          {section ===
-            "referral" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="NETWORK"
-                title="Referral Center"
-                description="Direct users are loaded directly from the contract's referral storage."
-              />
-
-              <div className="statsGrid">
-                <StatCard
-                  label="Direct Referrals"
-                  value={profile.directCount.toString()}
-                />
-
-                <StatCard
-                  label="Active Directs"
-                  value={profile.activeDirectCount.toString()}
-                />
-
-                <StatCard
-                  label="Sponsor ID"
-                  value={`#${profile.sponsorId.toString()}`}
-                />
-
-                <StatCard
-                  label="User ID"
-                  value={`#${profile.id.toString()}`}
-                />
-              </div>
-
-              <div className="panel">
-                <div className="panelHeader">
-                  <div>
-                    <span className="panelEyebrow">
-                      DIRECT TEAM
-                    </span>
-
-                    <h3>
-                      My Direct Referrals
-                    </h3>
-                  </div>
-
-                  <span>
-                    {directUsers.length} users
-                  </span>
-                </div>
-
-                {directUsers.length >
-                0 ? (
-                  <div className="tableWrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>
-                            User
-                          </th>
-
-                          <th>
-                            Wallet
-                          </th>
-
-                          <th>
-                            Status
-                          </th>
-
-                          <th>
-                            Business
-                          </th>
-
-                          <th>
-                            Directs
-                          </th>
-                        </tr>
-                      </thead>
-
-                      <tbody>
-                        {directUsers.map(
-                          (
-                            user
-                          ) => (
-                            <tr
-                              key={
-                                user.id
-                              }
-                            >
-                              <td>
-                                <strong>
-                                  #
-                                  {
-                                    user.id
-                                  }
-                                </strong>
-                              </td>
-
-                              <td>
-                                <code>
-                                  {
-                                    shortAddress(
-                                      user.wallet
-                                    )
-                                  }
-                                </code>
-                              </td>
-
-                              <td>
-                                <span
-                                  className={`statusText ${
-                                    user.status ===
-                                    UserStatus.ACTIVE
-                                      ? "greenText"
-                                      : ""
-                                  }`}
-                                >
-                                  {statusLabel(
-                                    user.status
-                                  )}
-                                </span>
-                              </td>
-
-                              <td>
-                                $
-                                {formatUSDT(
-                                  user.lifetimeBusiness
-                                )}
-                              </td>
-
-                              <td>
-                                {
-                                  user.directCount
-                                }
-                              </td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="No referrals found"
-                    description="getDirectUsers() returned no direct users."
-                  />
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              WITHDRAWAL
-          ================================================= */}
-          {section ===
-            "withdrawal" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="WALLET"
-                title="Withdrawal"
-                description="Create a withdrawal request through the deployed ORBI contract."
-              />
-
-              <div className="walletGrid">
-                <div className="walletBalance">
-                  <span>
-                    Earning Wallet
-                  </span>
-
-                  <strong>
-                    $
-                    {formatUSDT(
-                      profile.earningWallet
-                    )}
-                  </strong>
-                </div>
-
-                <div className="walletBalance">
-                  <span>
-                    Rank Wallet
-                  </span>
-
-                  <strong>
-                    $
-                    {formatUSDT(
-                      profile.rankWallet
-                    )}
-                  </strong>
-                </div>
-
-                <div className="walletBalance">
-                  <span>
-                    Royalty Wallet
-                  </span>
-
-                  <strong>
-                    $
-                    {formatUSDT(
-                      profile.royaltyWallet
-                    )}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="withdrawGrid">
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        REQUEST
-                      </span>
-
-                      <h3>
-                        Withdraw USDT
-                      </h3>
-                    </div>
-                  </div>
-
-                  <label className="fieldLabel">
-                    Wallet Type
-                  </label>
-
-                  <select
-                    className="input"
-                    value={
-                      withdrawWallet
-                    }
-                    onChange={(e) =>
-                      setWithdrawWallet(
-                        Number(
-                          e.target.value
-                        ) as WalletType
-                      )
-                    }
-                  >
-                    <option
-                      value={
-                        WalletType.EARNING
-                      }
-                    >
-                      Earning Wallet
-                    </option>
-
-                    <option
-                      value={
-                        WalletType.RANK
-                      }
-                    >
-                      Rank Wallet
-                    </option>
-
-                    <option
-                      value={
-                        WalletType.ROYALTY
-                      }
-                    >
-                      Royalty Wallet
-                    </option>
-                  </select>
-
-                  <label className="fieldLabel">
-                    Amount
-                  </label>
-
-                  <input
-                    className="input"
-                    value={
-                      withdrawAmount
-                    }
-                    onChange={(e) =>
-                      setWithdrawAmount(
-                        e.target.value
-                      )
-                    }
-                    placeholder="20"
-                    inputMode="decimal"
-                  />
-
-                  <button
-                    className="primaryButton"
-                    disabled={
-                      txBusy ||
-                      !withdrawAmount
-                    }
-                    onClick={
-                      withdraw
-                    }
-                  >
-                    {txBusy
-                      ? "Processing..."
-                      : "Request Withdrawal"}
-                  </button>
-                </div>
-
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        INFORMATION
-                      </span>
-
-                      <h3>
-                        Withdrawal Wallets
-                      </h3>
-                    </div>
-                  </div>
-
-                  <div className="businessRows">
-                    <div>
-                      <span>
-                        Earning
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.earningWallet
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Rank
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.rankWallet
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Royalty
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.royaltyWallet
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Total Withdrawn
-                      </span>
-
-                      <strong>
-                        $
-                        {formatUSDT(
-                          profile.totalWithdrawn
-                        )}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              PROFILE
-          ================================================= */}
-          {section ===
-            "profile" && (
-            <section className="content">
-              <SectionTitle
-                eyebrow="ACCOUNT"
-                title="My Profile"
-                description="Complete profile values read from the ORBI smart contract."
-              />
-
-              <div className="profileGrid">
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        IDENTITY
-                      </span>
-
-                      <h3>
-                        Account
-                      </h3>
-                    </div>
-                  </div>
-
-                  <div className="profileSummary">
-                    <div>
-                      <span>
-                        User ID
-                      </span>
-
-                      <strong>
-                        #
-                        {profile.id.toString()}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Wallet
-                      </span>
-
-                      <strong className="addressValue">
-                        {shortAddress(
-                          profile.wallet
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Sponsor ID
-                      </span>
-
-                      <strong>
-                        #
-                        {profile.sponsorId.toString()}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Status
-                      </span>
-
-                      <strong className="greenText">
-                        {statusLabel(
-                          profile.status
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Rank
-                      </span>
-
-                      <strong>
-                        R{profile.rank}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Royalty
-                      </span>
-
-                      <strong>
-                        {profile.royalty}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="panel">
-                  <div className="panelHeader">
-                    <div>
-                      <span className="panelEyebrow">
-                        CONTRACT
-                      </span>
-
-                      <h3>
-                        Deployed Contract
-                      </h3>
-                    </div>
-                  </div>
-
-                  <div className="contractInfo">
-                    <span>
-                      ORBIWorld
-                    </span>
-
-                    <code>
-                      {
-                        CONTRACT_ADDRESS
-                      }
-                    </code>
-
-                    <a
-                      href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open on BscScan ↗
-                    </a>
-
-                    <span>
-                      USDT
-                    </span>
-
-                    <code>
-                      {
-                        USDT_ADDRESS
-                      }
-                    </code>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* =================================================
-              STAKE ACTION
-          ================================================= */}
-          {(section ===
-            "overview" ||
-            section ===
-              "packages") && (
-            <section className="content">
-              <div className="panel stakePanel">
-                <div className="panelHeader">
-                  <div>
-                    <span className="panelEyebrow">
-                      STAKING
-                    </span>
-
-                    <h3>
-                      {profile.status ===
-                      UserStatus.ACTIVE
-                        ? "Create New Package"
-                        : "Activate Account"}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="stakeForm">
-                  <div>
-                    <label className="fieldLabel">
-                      USDT Amount
-                    </label>
-
-                    <input
-                      className="input"
-                      value={
-                        stakeAmount
-                      }
-                      onChange={(e) =>
-                        setStakeAmount(
-                          e.target.value
-                        )
-                      }
-                      placeholder="50"
-                      inputMode="decimal"
-                    />
-                  </div>
-
-                  <button
-                    className="primaryButton"
-                    disabled={
-                      txBusy ||
-                      !stakeAmount
-                    }
-                    onClick={
-                      profile.status ===
-                      UserStatus.ACTIVE
-                        ? topUp
-                        : activate
-                    }
-                  >
-                    {txBusy
-                      ? "Processing..."
-                      : profile.status ===
-                        UserStatus.ACTIVE
-                      ? "Top Up"
-                      : "Activate Account"}
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
-
-          <footer className="footer">
-            <span>
-              ORBIWORLD
-            </span>
-
-            <span>
-              Contract-powered dashboard
-            </span>
-
-            <a
-              href={`${BSC_TESTNET.explorer}/address/${CONTRACT_ADDRESS}`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              className="secondary"
+              onClick={
+                disconnectWallet
+              }
             >
-              Contract ↗
-            </a>
-          </footer>
-        </main>
+              Disconnect
+            </button>
+          </div>
+        </header>
+
+        {message && (
+          <div className="notice">
+            {message}
+          </div>
+        )}
+
+        {error && (
+          <div className="error">
+            <span>
+              {error}
+            </span>
+
+            <button
+              onClick={() =>
+                setError("")
+              }
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {!profile ? (
+          <RegistrationState
+            account={account}
+            connect={
+              connectWallet
+            }
+          />
+        ) : (
+          <DashboardContent
+            section={section}
+            setSection={
+              setSection
+            }
+            profile={
+              profile
+            }
+            config={
+              config
+            }
+            usdtBalance={
+              usdtBalance
+            }
+            packages={
+              packages
+            }
+            automationStatus={
+              automationStatus
+            }
+            withdrawals={
+              withdrawals
+            }
+            rankHistory={
+              rankHistory
+            }
+            royaltyHistory={
+              royaltyHistory
+            }
+            team={team}
+            referralLink={
+              referralLink
+            }
+            stakeAmount={
+              stakeAmount
+            }
+            setStakeAmount={
+              setStakeAmount
+            }
+            activate={
+              activatePackage
+            }
+            topUp={
+              topUpPackage
+            }
+            busy={busy}
+            withdrawAmount={
+              withdrawAmount
+            }
+            setWithdrawAmount={
+              setWithdrawAmount
+            }
+            withdrawWallet={
+              withdrawWallet
+            }
+            setWithdrawWallet={
+              setWithdrawWallet
+            }
+            requestWithdrawal={
+              requestWithdrawal
+            }
+            emergencyWithdraw={
+              emergencyCapitalWithdraw
+            }
+          />
+        )}
+      </main>
+
+      <style jsx global>
+        {styles}
+      </style>
+    </div>
+  );
+}
+
+/* =========================================================
+   NAV COMPONENTS
+========================================================= */
+
+function NavButton({
+  label,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`navBtn ${
+        active
+          ? "active"
+          : ""
+      }`}
+      onClick={
+        onClick
+      }
+    >
+      <span className="navIcon">
+        {icon}
+      </span>
+
+      <span>
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function titleFor(
+  section: Section
+) {
+  const titles: Record<
+    Section,
+    string
+  > = {
+    overview:
+      "Dashboard Overview",
+
+    packages:
+      "My Packages",
+
+    earnings:
+      "Earnings",
+
+    business:
+      "Business Center",
+
+    referral:
+      "Referral Center",
+
+    "level-income":
+      "Level Income",
+
+    rank:
+      "Rank Center",
+
+    royalty:
+      "Royalty Center",
+
+    withdrawal:
+      "Withdrawal",
+
+    emergency:
+      "Emergency Capital Withdrawal",
+
+    "history-staking":
+      "Staking History",
+
+    "history-withdrawal":
+      "Withdrawal History",
+
+    "history-rank":
+      "Rank Reward History",
+
+    "history-royalty":
+      "Royalty History",
+
+    profile:
+      "Profile",
+  };
+
+  return titles[section];
+}
+
+/* =========================================================
+   LOGIN SCREEN
+========================================================= */
+
+function LoginScreen({
+  connect,
+  busy,
+  error,
+}: {
+  connect: () => void;
+  busy: boolean;
+  error: string;
+}) {
+  return (
+    <div className="login">
+      <div className="loginCard">
+        <img
+          src="/orbi-logo.png"
+          alt="ORBI"
+        />
+
+        <span className="eyebrow">
+          ORBIWORLD
+        </span>
+
+        <h1>
+          Decentralized Dashboard
+        </h1>
+
+        <p>
+          Connect your Web3
+          wallet to access
+          staking, earnings,
+          referrals, rank,
+          royalty and
+          withdrawals.
+        </p>
+
+        {error && (
+          <div className="error">
+            {error}
+          </div>
+        )}
+
+        <button
+          className="primary"
+          onClick={connect}
+          disabled={busy}
+        >
+          {busy
+            ? "Connecting..."
+            : "Connect Wallet"}
+        </button>
+
+        <small>
+          BSC Testnet •
+          Smart Contract
+          Powered
+        </small>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   REGISTRATION STATE
+========================================================= */
+
+function RegistrationState({
+  account,
+  connect,
+}: {
+  account: string;
+  connect: () => void;
+}) {
+  return (
+    <section className="registrationCard">
+      <div className="registrationIcon">
+        ◎
+      </div>
+
+      <span className="eyebrow">
+        ACCOUNT SETUP
+      </span>
+
+      <h2>
+        ORBI registration
+        required
+      </h2>
+
+      <p>
+        This wallet is
+        connected, but no
+        ORBI on-chain
+        profile was found.
+      </p>
+
+      <div className="refExplain">
+        <b>
+          Connected Wallet
+        </b>
+
+        <code>
+          {shortAddress(
+            account
+          )}
+        </code>
+      </div>
+
+      <button
+        className="primary"
+        onClick={connect}
+      >
+        Check Referral &
+        Register
+      </button>
+
+      <small>
+        New users must
+        enter through a
+        valid ORBI referral
+        link.
+      </small>
+    </section>
+  );
+}
+
+/* =========================================================
+   DASHBOARD CONTENT
+========================================================= */
+
+function DashboardContent(
+  props: any
+) {
+  const {
+    section,
+    setSection,
+    profile,
+    config,
+    usdtBalance,
+    packages,
+    automationStatus,
+    withdrawals,
+    rankHistory,
+    royaltyHistory,
+    team,
+    referralLink,
+    stakeAmount,
+    setStakeAmount,
+    activate,
+    topUp,
+    busy,
+    withdrawAmount,
+    setWithdrawAmount,
+    withdrawWallet,
+    setWithdrawWallet,
+    requestWithdrawal,
+    emergencyWithdraw,
+  } = props;
+
+  const total =
+    profile.earningWallet
+      .add(
+        profile.rankWallet
+      )
+      .add(
+        profile.royaltyWallet
+      );
+
+  switch (section) {
+    case "overview":
+      return (
+        <Overview
+          profile={profile}
+          usdtBalance={
+            usdtBalance
+          }
+          total={total}
+          packages={packages}
+          config={config}
+          setSection={
+            setSection
+          }
+        />
+      );
+
+    case "packages":
+      return (
+        <Packages
+          profile={profile}
+          config={config}
+          packages={packages}
+          amount={
+            stakeAmount
+          }
+          setAmount={
+            setStakeAmount
+          }
+          activate={
+            activate
+          }
+          topUp={
+            topUp
+          }
+          busy={busy}
+          automationStatus={automationStatus}
+        />
+      );
+
+    case "earnings":
+      return (
+        <Earnings
+          profile={profile}
+        />
+      );
+
+      case "level-income":
+  return (
+    <LevelIncome
+      profile={profile}
+    />
+  );
+
+    case "business":
+      return (
+        <Business
+          profile={profile}
+          team={team}
+        />
+      );
+
+    case "referral":
+      return (
+        <Referral
+          profile={profile}
+          link={
+            referralLink
+          }
+        />
+      );
+
+    case "rank":
+      return (
+        <Rank
+          profile={profile}
+          config={config}
+        />
+      );
+
+    case "royalty":
+      return (
+        <Royalty
+          profile={profile}
+          config={config}
+          history={
+            royaltyHistory
+          }
+        />
+      );
+
+    case "withdrawal":
+      return (
+        <Withdrawal
+          profile={profile}
+          config={config}
+          amount={
+            withdrawAmount
+          }
+          setAmount={
+            setWithdrawAmount
+          }
+          wallet={
+            withdrawWallet
+          }
+          setWallet={
+            setWithdrawWallet
+          }
+          submit={
+            requestWithdrawal
+          }
+          busy={busy}
+        />
+      );
+
+    case "emergency":
+      return (
+        <Emergency
+          profile={profile}
+          config={config}
+          submit={
+            emergencyWithdraw
+          }
+          busy={busy}
+        />
+      );
+
+    case "history-staking":
+      return (
+        <History
+          title="Staking History"
+          headers={[
+            "Package",
+            "Amount",
+            "Max Payout",
+            "Status",
+            "Block",
+            "Tx",
+          ]}
+        >
+          {packages.map(
+            (
+              item: PackageRow
+            ) => (
+              <tr
+                key={
+                  item.packageId
+                }
+              >
+                <td>
+                  #
+                  {
+                    item.packageId
+                  }
+                </td>
+
+                <td>
+                  {money(
+                    item.amount
+                  )}{" "}
+                  USDT
+                </td>
+
+                <td>
+                  {money(
+                    item.maxPayout
+                  )}{" "}
+                  USDT
+                </td>
+
+                <td>
+                  <Pill
+                    value={
+                      item.closed
+                        ? "CLOSED"
+                        : "ACTIVE"
+                    }
+                  />
+                </td>
+
+                <td>
+                  {
+                    item.block
+                  }
+                </td>
+
+                <td>
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
+                </td>
+              </tr>
+            )
+          )}
+        </History>
+      );
+
+    case "history-withdrawal":
+      return (
+        <History
+          title="Withdrawal History"
+          headers={[
+            "Request",
+            "Wallet",
+            "Amount",
+            "Fee",
+            "Net",
+            "Status",
+            "Tx",
+          ]}
+        >
+          {withdrawals.map(
+            (
+              item: WithdrawalRow
+            ) => (
+              <tr
+                key={
+                  item.requestId
+                }
+              >
+                <td>
+                  #
+                  {
+                    item.requestId
+                  }
+                </td>
+
+                <td>
+                  {walletLabel(
+                    item.walletType
+                  )}
+                </td>
+
+                <td>
+                  {money(
+                    item.amount
+                  )}
+                </td>
+
+                <td>
+                  {money(
+                    item.fee
+                  )}
+                </td>
+
+                <td>
+                  {money(
+                    item.netAmount
+                  )}
+                </td>
+
+                <td>
+                  <Pill
+                    value={
+                      item.status
+                    }
+                  />
+                </td>
+
+                <td>
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
+                </td>
+              </tr>
+            )
+          )}
+        </History>
+      );
+
+    case "history-rank":
+      return (
+        <History
+          title="Rank Reward History"
+          headers={[
+            "Rank",
+            "Reward",
+            "Block",
+            "Tx",
+          ]}
+        >
+          {rankHistory.map(
+            (
+              item: RankRow,
+              index: number
+            ) => (
+              <tr
+                key={`${item.block}-${index}`}
+              >
+                <td>
+                  {rankLabel(
+                    item.rank
+                  )}
+                </td>
+
+                <td>
+                  {money(
+                    item.reward
+                  )}{" "}
+                  USDT
+                </td>
+
+                <td>
+                  {
+                    item.block
+                  }
+                </td>
+
+                <td>
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
+                </td>
+              </tr>
+            )
+          )}
+        </History>
+      );
+
+    case "history-royalty":
+      return (
+        <History
+          title="Royalty History"
+          headers={[
+            "Royalty",
+            "Amount",
+            "Block",
+            "Tx",
+          ]}
+        >
+          {royaltyHistory.map(
+            (
+              item: RoyaltyRow,
+              index: number
+            ) => (
+              <tr
+                key={`${item.block}-${index}`}
+              >
+                <td>
+                  {royaltyLabel(
+                    item.level
+                  )}
+                </td>
+
+                <td>
+                  {money(
+                    item.amount
+                  )}{" "}
+                  USDT
+                </td>
+
+                <td>
+                  {
+                    item.block
+                  }
+                </td>
+
+                <td>
+                  <a
+                    href={txUrl(
+                      item.tx
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View
+                  </a>
+                </td>
+              </tr>
+            )
+          )}
+        </History>
+      );
+
+    case "profile":
+      return (
+        <ProfileView
+          profile={
+            profile
+          }
+        />
+      );
+
+    default:
+      return null;
+  }
+}
+
+/* =========================================================
+   OVERVIEW
+========================================================= */
+
+function Overview({
+  profile,
+  usdtBalance,
+  total,
+  packages,
+  config,
+  setSection,
+}: any) {
+  const activePackage =
+    (packages as PackageRow[]).find(
+      (item) => !item.closed
+    ) || packages?.[0];
+
+  const packageInfo = activePackage
+    ? (() => {
+        const target = activePackage.maxPayout;
+
+        const roiPaid = activePackage.roiPaid;
+        const remaining = activePackage.maxPayout.gt(activePackage.totalPaid)
+          ? activePackage.maxPayout.sub(activePackage.totalPaid)
+          : ZERO;
+
+        const dailyROI = activePackage.amount
+          .mul(config.roiBps)
+          .div(config.bpsDivider);
+
+        const daysRemaining = dailyROI.gt(0)
+          ? remaining
+              .add(dailyROI)
+              .sub(1)
+              .div(dailyROI)
+              .toNumber()
+          : 0;
+
+        const progress = activePackage.maxPayout.gt(0)
+          ? Math.min(
+              100,
+              Number(
+                activePackage.totalPaid
+                  .mul(100)
+                  .div(activePackage.maxPayout)
+              )
+            )
+          : 0;
+
+        return {
+          target,
+          roiPaid,
+          remaining,
+          dailyROI,
+          daysRemaining,
+          progress,
+        };
+      })()
+    : null;
+
+  return (
+    <>
+      <div className="welcome">
+        <div>
+          <span className="eyebrow">
+            WELCOME BACK
+          </span>
+
+          <h2>
+            Build your network. Grow your business.
+          </h2>
+
+          <p>
+            {statusLabel(profile.status)} • User #{profile.id.toString()}
+          </p>
+        </div>
+
+        <div className="walletBalance">
+          <small>USDT Wallet</small>
+          <b>{money(usdtBalance)}</b>
+        </div>
+      </div>
+
+      <div className="grid four">
+        <Metric
+          title="Earning Wallet"
+          value={money(profile.earningWallet)}
+          sub="ROI + Level"
+        />
+        <Metric
+          title="Rank Wallet"
+          value={money(profile.rankWallet)}
+          sub="Rank rewards"
+        />
+        <Metric
+          title="Royalty Wallet"
+          value={money(profile.royaltyWallet)}
+          sub="Royalty income"
+        />
+        <Metric
+          title="Total Available"
+          value={money(total)}
+          sub="Withdrawable wallets"
+        />
+      </div>
+
+      <div className="grid four">
+        <Metric
+          title="Lifetime ROI"
+          value={money(profile.totalROIIncome)}
+          sub="Cumulative"
+        />
+        <Metric
+          title="Lifetime Level"
+          value={money(profile.totalLevelIncome)}
+          sub="Cumulative"
+        />
+        <Metric
+          title="Rank Rewards"
+          value={money(profile.totalRankIncome)}
+          sub="Cumulative"
+        />
+        <Metric
+          title="Royalty Income"
+          value={money(profile.totalRoyaltyIncome)}
+          sub="Cumulative"
+        />
+      </div>
+
+      {packageInfo && activePackage && (
+        <Card title={`Active Package • #${activePackage.packageId}`}>
+          <div className="packageHero">
+            <div>
+              <span className="eyebrow">ACTIVE STAKING</span>
+              <strong>${money(activePackage.amount)} USDT</strong>
+              <small>Started from the confirmed on-chain activation transaction.</small>
+            </div>
+            <Pill value={activePackage.closed ? "CLOSED" : "ACTIVE"} />
+          </div>
+
+          <div className="grid four packageMetrics">
+            <Metric
+              title="Max Payout"
+              value={`${money(packageInfo.target)} USDT`}
+              sub="Contract max payout"
+            />
+            <Metric
+              title="ROI Received"
+              value={`${money(packageInfo.roiPaid)} USDT`}
+              sub="Actual ROI processed"
+            />
+            <Metric
+              title="Remaining Payout"
+              value={`${money(packageInfo.remaining)} USDT`}
+              sub="Until max payout"
+            />
+            <Metric
+              title="Days Remaining"
+              value={activePackage.closed ? "0" : String(packageInfo.daysRemaining)}
+              sub={activePackage.closed ? "Completed" : "Based on actual ROI"}
+            />
+          </div>
+
+          <Progress
+            label="Progress to Max Payout"
+            value={packageInfo.progress}
+          />
+
+          <div className="packageActions">
+            <button
+              className="secondary"
+              onClick={() => setSection("packages")}
+            >
+              Open My Packages
+            </button>
+            <button
+              className="secondary"
+              onClick={() => setSection("history-staking")}
+            >
+              Staking History
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {!activePackage && (
+        <Card title="Active Package">
+          <p className="muted">
+            No active package detected yet. After a confirmed staking transaction, this card will update automatically.
+          </p>
+        </Card>
+      )}
+
+      <div className="two">
+        <Card title="Business Snapshot">
+          <Row label="Today Business" value={`${money(profile.todayBusiness)} USDT`} />
+          <Row label="30-Day Business" value={`${money(profile.monthlyBusiness)} USDT`} />
+          <Row label="Lifetime Business" value={`${money(profile.lifetimeBusiness)} USDT`} />
+          <Row label="Power Leg" value={`${money(profile.powerLegBusiness)} USDT`} />
+          <Row label="Other Leg" value={`${money(profile.otherLegBusiness)} USDT`} />
+        </Card>
+
+        <Card title="Current Qualification">
+          <Row label="Rank" value={rankLabel(profile.rank)} />
+          <Row label="Royalty" value={royaltyLabel(profile.royalty)} />
+          <Row label="Directs" value={String(profile.directCount)} />
+          <Row label="Active Directs" value={String(profile.activeDirectCount)} />
+          <button
+            className="secondary full"
+            onClick={() => setSection("referral")}
+          >
+            Open Referral Center
+          </button>
+        </Card>
       </div>
     </>
   );
 }
 
 /* =========================================================
-   CSS
+   PACKAGES
 ========================================================= */
 
-const GLOBAL_CSS = `
-* {
-  box-sizing: border-box;
+function Packages({
+  config,
+  packages,
+  amount,
+  setAmount,
+  activate,
+  topUp,
+  busy,
+  automationStatus,
+}: any) {
+  return (
+    <>
+      <Page
+        title="My Packages"
+        sub="On-chain package activity and staking controls."
+      />
+
+      <div className="grid four">
+        <Metric
+          title="Minimum Stake"
+          value={`${money(
+            config.minStake
+          )} USDT`}
+          sub="Contract config"
+        />
+
+        <Metric
+          title="Minimum Top-up"
+          value={`${money(
+            config.minTopup
+          )} USDT`}
+          sub="Contract config"
+        />
+
+        <Metric
+          title="Daily ROI"
+          value={`${(
+            config.roiBps / (config.bpsDivider / 100)
+          ).toFixed(2)}%`}
+          sub="Contract config"
+        />
+
+        <Metric
+          title="Max Payout"
+          value={`${config.maxPackageMultiplier}×`}
+          sub="Per package"
+        />
+      </div>
+
+      <div className="grid four">
+        <Metric
+  title="Actual ROI Received"
+  value={`${money(
+    packages.reduce(
+      (
+        total: ethers.BigNumber,
+        item: PackageRow
+      ) =>
+        total.add(item.roiPaid),
+      ZERO
+    )
+  )} USDT`}
+  sub="From DailyROIProcessed events"
+/>
+
+        <Metric
+          title="Package Count"
+          value={String(
+            packages.length
+          )}
+          sub="Detected on-chain"
+        />
+      </div>
+
+      <Card title="Activate / Top Up">
+        <div className="formGrid">
+          <input
+            value={amount}
+            onChange={(e) =>
+              setAmount(
+                e.target.value
+              )
+            }
+            placeholder={`Amount (min ${money(
+              config.minStake
+            )} USDT)`}
+            inputMode="decimal"
+          />
+
+          <button
+            className="primary"
+            disabled={
+              busy ||
+              !config.stakingEnabled
+            }
+            onClick={
+              activate
+            }
+          >
+            {busy
+              ? "Processing..."
+              : "Activate Package"}
+          </button>
+
+          <button
+            className="secondary"
+            disabled={
+              busy ||
+              !config.stakingEnabled
+            }
+            onClick={
+              topUp
+            }
+          >
+            Top Up
+          </button>
+        </div>
+
+        <p className="muted">
+          USDT approval is
+          requested only when
+          the current allowance
+          is insufficient.
+        </p>
+      </Card>
+
+      {packages.map(
+        (item: PackageRow) => {
+          const target = item.maxPayout;
+
+          // The contract closes a package when totalPaid reaches maxPayout.
+          // totalPaid includes ROI + level income credited against that package.
+          const roiPaid = item.roiPaid;
+          const remainingPayout = item.maxPayout.gt(item.totalPaid)
+            ? item.maxPayout.sub(item.totalPaid)
+            : ZERO;
+
+          const dailyROI =
+            item.amount
+              .mul(config.roiBps)
+              .div(config.bpsDivider);
+
+          const progress =
+            item.maxPayout.gt(0)
+              ? Math.min(
+                  100,
+                  Number(
+                    item.totalPaid
+                      .mul(100)
+                      .div(item.maxPayout)
+                  )
+                )
+              : 0;
+
+          const daysToCap =
+            dailyROI.gt(0)
+              ? remainingPayout
+                  .add(dailyROI)
+                  .sub(1)
+                  .div(dailyROI)
+                  .toNumber()
+              : 0;
+
+          return (
+            <div
+              key={item.packageId}
+              className="two"
+              style={{
+                marginTop: 18,
+              }}
+            >
+              <Card
+                title={`Staking Info • Package #${item.packageId}`}
+              >
+                <Row
+                  label="Staked"
+                  value={`${money(
+                    item.amount
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Target (2×)"
+                  value={`${money(
+                    target
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Daily ROI"
+                  value={`${(
+                    config.roiBps /
+                    100
+                  ).toFixed(2)}%`}
+                />
+
+                <Row
+                  label="ROI Received"
+                  value={`${money(
+                    roiPaid
+                  )} USDT`}
+                />
+
+                <Row
+                  label="Est. Days to Cap"
+                  value={
+                    item.closed
+                      ? "Completed"
+                      : `${daysToCap} days`
+                  }
+                />
+
+                <Row
+                  label="Package Status"
+                  value={
+                    item.closed
+                      ? "Closed"
+                      : "Active"
+                  }
+                />
+
+                <Progress
+                  label="Progress to Max Payout"
+                  value={progress}
+                />
+
+                <p className="muted">
+                  Progress uses the package's actual on-chain
+                  totalPaid/maxPayout values. Days are an estimate
+                  using the current configured daily ROI.
+                </p>
+
+                <a
+                  href={txUrl(
+                    item.tx
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  View activation transaction ↗
+                </a>
+              </Card>
+
+              <Card title="ROI Automation">
+                {automationStatus ? (
+                  <>
+                    <Row
+                      label="Automation"
+                      value={
+                        automationStatus.enabled
+                          ? "Enabled"
+                          : "Disabled"
+                      }
+                    />
+
+                    <Row
+                      label="Automation Role"
+                      value={
+                        automationStatus.hasRole
+                          ? "Present"
+                          : "Not assigned"
+                      }
+                    />
+
+                    <Row
+                      label="Last Processing"
+                      value={
+                        automationStatus.processedToday
+                          ? "Processed today"
+                          : "Not processed today"
+                      }
+                    />
+
+                    <Row
+                      label="Batch Size"
+                      value={automationStatus.batchSize.toString()}
+                    />
+
+                    <p className="muted">
+                      If this says
+                      "Not processed today" and
+                      ROI Received is 0 after a
+                      completed 24-hour cycle,
+                      processDailyROI has not
+                      credited this package yet.
+                    </p>
+                  </>
+                ) : (
+                  <p className="muted">
+                    Automation status could not
+                    be read from the deployed
+                    contract.
+                  </p>
+                )}
+              </Card>
+            </div>
+          );
+        }
+      )}
+
+      {packages.length === 0 && (
+        <Card title="Staking Info">
+          <p className="muted">
+            No PackageActivated event was found
+            for this wallet.
+          </p>
+        </Card>
+      )}
+    </>
+  );
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: #eef2ff;
-  color: #111827;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+/* =========================================================
+   EARNINGS
+========================================================= */
+
+function Earnings({
+  profile,
+}: any) {
+  return (
+    <>
+      <Page
+        title="Earnings"
+        sub="Balances and cumulative income stored by the contract."
+      />
+
+      <div className="grid four">
+        <Metric
+          title="ROI Income"
+          value={money(
+            profile.totalROIIncome
+          )}
+          sub="Cumulative"
+        />
+
+        <Metric
+          title="Level Income"
+          value={money(
+            profile.totalLevelIncome
+          )}
+          sub="Cumulative"
+        />
+
+        <Metric
+          title="Rank Income"
+          value={money(
+            profile.totalRankIncome
+          )}
+          sub="Cumulative"
+        />
+
+        <Metric
+          title="Royalty Income"
+          value={money(
+            profile.totalRoyaltyIncome
+          )}
+          sub="Cumulative"
+        />
+      </div>
+
+      <Card title="Wallet Balances">
+        <Row
+          label="Earning Wallet (ROI + Level)"
+          value={`${money(
+            profile.earningWallet
+          )} USDT`}
+        />
+
+        <Row
+          label="Rank Wallet"
+          value={`${money(
+            profile.rankWallet
+          )} USDT`}
+        />
+
+        <Row
+          label="Royalty Wallet"
+          value={`${money(
+            profile.royaltyWallet
+          )} USDT`}
+        />
+
+        <Row
+          label="Total Withdrawn"
+          value={`${money(
+            profile.totalWithdrawn
+          )} USDT`}
+        />
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   LEVEL INCOME
+========================================================= */
+
+/* =========================================================
+   LEVEL INCOME
+========================================================= */
+
+function LevelIncome({ profile, config }: any) {
+  return (
+    <>
+      <Page title="Level Income" sub="Level percentages are read directly from the smart contract." />
+      <div className="two">
+        <Card title="Level Income Summary">
+          <Row label="Lifetime Level Income" value={`${money(profile.totalLevelIncome)} USDT`} />
+          <Row label="Current Earning Wallet" value={`${money(profile.earningWallet)} USDT`} />
+          <Row label="Lifetime Business" value={`${money(profile.lifetimeBusiness)} USDT`} />
+        </Card>
+        <Card title="Network Qualification">
+          <Row label="Direct Members" value={String(profile.directCount)} />
+          <Row label="Active Directs" value={String(profile.activeDirectCount)} />
+          <Row label="Network Business" value={`${money(profile.lifetimeBusiness)} USDT`} />
+        </Card>
+      </div>
+      <Card title="Level Structure">
+        <div className="levelTable">
+          <div className="levelTableHead"><span>LEVEL</span><span>PERCENT</span><span>STATUS</span></div>
+          {config.levels.map((bps: number, i: number) => {
+            const percent = bps / config.bpsDivider * 100;
+            const isOpen = bps > 0 && profile.activeDirectCount >= i + 1;
+            return (
+              <div className="levelTableRow" key={i + 1}>
+                <span>L{i + 1}</span><span>{percent % 1 === 0 ? percent.toFixed(0) : percent.toFixed(2)}%</span>
+                <span className={isOpen ? "levelStatus open" : "levelStatus pending"}>{isOpen ? "OPEN" : "PENDING"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   BUSINESS
+========================================================= */
+
+function Business({
+  profile,
+  team,
+}: any) {
+  return (
+    <>
+      <Page
+        title="Business Center"
+        sub="Business metrics read directly from your on-chain profile."
+      />
+
+      <div className="grid three">
+        <Metric
+          title="Today"
+          value={`${money(
+            profile.todayBusiness
+          )} USDT`}
+          sub="Current day"
+        />
+
+        <Metric
+          title="30-Day"
+          value={`${money(
+            profile.monthlyBusiness
+          )} USDT`}
+          sub="Current month window"
+        />
+
+        <Metric
+          title="Lifetime"
+          value={`${money(
+            profile.lifetimeBusiness
+          )} USDT`}
+          sub="Lifetime business"
+        />
+      </div>
+
+      <div className="two">
+        <Card title="Leg Business">
+          <Row
+            label="Power Leg"
+            value={`${money(
+              profile.powerLegBusiness
+            )} USDT`}
+          />
+
+          <Row
+            label="Other Leg"
+            value={`${money(
+              profile.otherLegBusiness
+            )} USDT`}
+          />
+        </Card>
+
+        <Card title="Team Stats">
+          <Row
+            label="Direct Referrals"
+            value={String(
+              profile.directCount
+            )}
+          />
+
+          <Row
+            label="Active Directs"
+            value={String(
+              profile.activeDirectCount
+            )}
+          />
+
+          <Row
+            label="Sponsor ID"
+            value={`#${profile.sponsorId.toString()}`}
+          />
+        </Card>
+      </div>
+
+      <Card title="My Direct Team">
+        {team.length === 0 ? (
+          <Empty
+            text="No direct registrations found yet."
+          />
+        ) : (
+          <div className="team">
+            {team.map(
+              (member: TeamRow) => (
+                <div
+                  className="teamRow"
+                  key={
+                    member.id
+                  }
+                >
+                  <div>
+                    <b>
+                      #
+                      {
+                        member.id
+                      }
+                    </b>
+
+                    <span>
+                      {shortAddress(
+                        member.wallet
+                      )}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span>
+                      {statusLabel(
+                        member.status
+                      )}
+                    </span>
+
+                    <small>
+                      Directs{" "}
+                      {
+                        member.directCount
+                      }{" "}
+                      • Active{" "}
+                      {
+                        member.activeDirectCount
+                      }
+                    </small>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        )}
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   REFERRAL
+========================================================= */
+
+function Referral({
+  profile,
+  link,
+}: any) {
+  async function copyReferral() {
+    try {
+      await navigator.clipboard.writeText(
+        link
+      );
+    } catch {
+      return;
+    }
+  }
+
+  return (
+    <>
+      <Page
+        title="Referral Center"
+        sub="Your unique sponsor link is generated from your wallet."
+      />
+
+      <Card title="Your Referral Link">
+        <div className="refBox">
+          <input
+            readOnly
+            value={link}
+          />
+
+          <button
+            className="primary"
+            onClick={
+              copyReferral
+            }
+          >
+            Copy Link
+          </button>
+        </div>
+
+        <div className="grid three">
+          <Metric
+            title="Direct Referrals"
+            value={String(
+              profile.directCount
+            )}
+            sub="Registered"
+          />
+
+          <Metric
+            title="Active Directs"
+            value={String(
+              profile.activeDirectCount
+            )}
+            sub="Active"
+          />
+
+          <Metric
+            title="Sponsor ID"
+            value={`#${profile.sponsorId.toString()}`}
+            sub="Your sponsor"
+          />
+        </div>
+      </Card>
+
+      <Card title="How Registration Works">
+        <ol className="steps">
+          <li>
+            Share your referral
+            link.
+          </li>
+
+          <li>
+            New user connects
+            MetaMask.
+          </li>
+
+          <li>
+            ORBI reads the
+            <code>
+              ?ref=
+            </code>{" "}
+            wallet.
+          </li>
+
+          <li>
+            User confirms one
+            registration
+            transaction.
+          </li>
+
+          <li>
+            After confirmation
+            the full dashboard
+            opens.
+          </li>
+        </ol>
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   RANK
+========================================================= */
+
+function Rank({ profile, config }: any) {
+  return (
+    <>
+      <Page title="Rank Center" sub="Rank qualification uses live contract configuration." />
+      <div className="grid three">
+        <Metric title="Current Rank" value={rankLabel(profile.rank)} sub="On-chain rank" />
+        <Metric title="Rank Wallet" value={`${money(profile.rankWallet)} USDT`} sub="Available" />
+        <Metric title="Total Rank Rewards" value={`${money(profile.totalRankIncome)} USDT`} sub="Cumulative" />
+      </div>
+      <div className="rankGrid">
+        {config.ranks.map((rank: any, index: number) => {
+          const achieved = profile.rank >= index + 1;
+          const powerProgress = rank.power.isZero() ? 100 : Math.min(100, Number(profile.powerLegBusiness.mul(100).div(rank.power)));
+          const otherProgress = rank.other.isZero() ? 100 : Math.min(100, Number(profile.otherLegBusiness.mul(100).div(rank.other)));
+          return (
+            <Card key={rank.name} title={rank.name}>
+              <div className="rankReward">{money(rank.reward)} USDT</div>
+              <p className="muted">Power {money(rank.power)} • Other {money(rank.other)}</p>
+              <Progress label="Power" value={powerProgress} />
+              <Progress label="Other" value={otherProgress} />
+              <Pill value={achieved ? "ACHIEVED" : "LOCKED"} />
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* =========================================================
+   ROYALTY
+========================================================= */
+
+function Royalty({ profile, config, history }: any) {
+  return (
+    <>
+      <Page title="Royalty Center" sub="Royalty qualification uses live contract configuration." />
+      <div className="grid three">
+        <Metric title="Current Royalty" value={royaltyLabel(profile.royalty)} sub="On-chain level" />
+        <Metric title="Royalty Wallet" value={`${money(profile.royaltyWallet)} USDT`} sub="Available" />
+        <Metric title="Total Royalty" value={`${money(profile.totalRoyaltyIncome)} USDT`} sub="Cumulative" />
+      </div>
+      <div className="two">
+        {config.royalties.map((royalty: any) => {
+          const progress = royalty.lifetime.isZero() ? 100 : Math.min(100, Number(profile.lifetimeBusiness.mul(100).div(royalty.lifetime)));
+          return (
+            <Card key={royalty.name} title={`Royalty ${royalty.name}`}>
+              <Row label="Lifetime" value={`${money(profile.lifetimeBusiness)} / ${money(royalty.lifetime)} USDT`} />
+              <Row label="30-Day" value={`${money(profile.monthlyBusiness)} / ${money(royalty.monthly)} USDT`} />
+              <Row label="Active Directs" value={`${profile.activeDirectCount} / ${royalty.directs}`} />
+              <Row label="Rate" value={`${(royalty.bps / config.bpsDivider * 100).toFixed(2)}%`} />
+              <Progress label="Lifetime" value={progress} />
+            </Card>
+          );
+        })}
+      </div>
+      <History title="Royalty History" headers={["Level", "Amount", "Block", "Tx"]}>
+        {history.map((item: RoyaltyRow, index: number) => (
+          <tr key={`${item.block}-${index}`}>
+            <td>{royaltyLabel(item.level)}</td><td>{money(item.amount)} USDT</td><td>{item.block}</td>
+            <td><a href={txUrl(item.tx)} target="_blank" rel="noreferrer">View</a></td>
+          </tr>
+        ))}
+      </History>
+    </>
+  );
+}
+
+/* =========================================================
+   WITHDRAWAL
+========================================================= */
+
+function Withdrawal({
+  profile,
+  config,
+  amount,
+  setAmount,
+  wallet,
+  setWallet,
+  submit,
+  busy,
+}: any) {
+  const available =
+    wallet ===
+    WalletType.EARNING
+      ? profile.earningWallet
+      : wallet ===
+        WalletType.RANK
+      ? profile.rankWallet
+      : profile.royaltyWallet;
+
+  const numericAmount =
+    Number(
+      amount || "0"
+    );
+
+  const fee =
+    numericAmount *
+    (config.feeBps / config.bpsDivider);
+
+  const net =
+    Math.max(
+      0,
+      numericAmount - fee
+    );
+
+  return (
+    <>
+      <Page
+        title="Withdrawal"
+        sub="Create an on-chain withdrawal request. Release is handled by the authorized withdrawal role."
+      />
+
+      <div className="grid three">
+        <Metric
+          title="Earning"
+          value={`${money(
+            profile.earningWallet
+          )} USDT`}
+          sub="ROI + Level"
+        />
+
+        <Metric
+          title="Rank"
+          value={`${money(
+            profile.rankWallet
+          )} USDT`}
+          sub="Rewards"
+        />
+
+        <Metric
+          title="Royalty"
+          value={`${money(
+            profile.royaltyWallet
+          )} USDT`}
+          sub="Rewards"
+        />
+      </div>
+
+      <Card title="Request Withdrawal">
+        <div className="formGrid">
+          <select
+            value={wallet}
+            onChange={(e) =>
+              setWallet(
+                Number(
+                  e.target.value
+                )
+              )
+            }
+          >
+            <option value={0}>
+              Earning Wallet
+            </option>
+
+            <option value={1}>
+              Rank Wallet
+            </option>
+
+            <option value={2}>
+              Royalty Wallet
+            </option>
+          </select>
+
+          <input
+            value={amount}
+            onChange={(e) =>
+              setAmount(
+                e.target.value
+              )
+            }
+            placeholder={`Minimum ${money(
+              config.minWithdrawal
+            )} USDT`}
+            inputMode="decimal"
+          />
+
+          <button
+            className="primary"
+            disabled={
+              busy ||
+              !config.withdrawalEnabled
+            }
+            onClick={
+              submit
+            }
+          >
+            {busy
+              ? "Processing..."
+              : "Request Withdrawal"}
+          </button>
+        </div>
+
+        <div className="fee">
+          <span>
+            Selected Balance{" "}
+            <b>
+              {money(
+                available
+              )}{" "}
+              USDT
+            </b>
+          </span>
+
+          <span>
+            Estimated Fee{" "}
+            <b>
+              {fee.toFixed(
+                2
+              )}{" "}
+              USDT
+            </b>
+          </span>
+
+          <span>
+            Estimated Net{" "}
+            <b>
+              {net.toFixed(
+                2
+              )}{" "}
+              USDT
+            </b>
+          </span>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   EMERGENCY CAPITAL WITHDRAWAL
+========================================================= */
+
+function Emergency({
+  profile,
+  config,
+  submit,
+  busy,
+}: any) {
+  const eligible =
+    profile.status === 2;
+
+  return (
+    <>
+      <Page
+        title="Emergency Capital Withdrawal"
+        sub="Permanent exit mechanism provided by the smart contract."
+      />
+
+      <Card title="Important">
+        <div className="dangerBox">
+          <b>
+            This action is irreversible.
+          </b>
+
+          <p>
+            The smart contract
+            closes your active
+            packages and changes
+            your account to
+            Emergency Exit.
+            Capital return is
+            calculated entirely
+            by the contract.
+          </p>
+
+          <button
+            className="danger"
+            disabled={
+              busy ||
+              !config.capitalWithdrawalEnabled ||
+              !eligible
+            }
+            onClick={
+              submit
+            }
+          >
+            {busy
+              ? "Processing..."
+              : "Emergency Capital Withdrawal"}
+          </button>
+
+          {!eligible && (
+            <p className="muted">
+              Emergency withdrawal
+              is available only
+              while the account is
+              ACTIVE.
+            </p>
+          )}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   PROFILE
+========================================================= */
+
+function ProfileView({
+  profile,
+}: any) {
+  return (
+    <>
+      <Page
+        title="Profile"
+        sub="Your on-chain account information."
+      />
+
+      <Card title="Wallet & Account">
+        <Row
+          label="Wallet"
+          value={
+            profile.wallet
+          }
+        />
+
+        <Row
+          label="User ID"
+          value={`#${profile.id.toString()}`}
+        />
+
+        <Row
+          label="Sponsor ID"
+          value={`#${profile.sponsorId.toString()}`}
+        />
+
+        <Row
+          label="Status"
+          value={statusLabel(
+            profile.status
+          )}
+        />
+
+        <Row
+          label="Rank"
+          value={rankLabel(
+            profile.rank
+          )}
+        />
+
+        <Row
+          label="Royalty"
+          value={royaltyLabel(
+            profile.royalty
+          )}
+        />
+
+        <Row
+          label="Lifetime Withdrawn"
+          value={`${money(
+            profile.totalWithdrawn
+          )} USDT`}
+        />
+
+        <div className="actions">
+          <a
+            className="secondary"
+            href={addressUrl(
+              profile.wallet
+            )}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View Wallet ↗
+          </a>
+
+          <a
+            className="secondary"
+            href={addressUrl(
+              CONTRACT_ADDRESS
+            )}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View Contract ↗
+          </a>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+/* =========================================================
+   UI COMPONENTS
+========================================================= */
+
+function History({
+  title,
+  headers,
+  children,
+}: {
+  title: string;
+  headers: string[];
+  children: ReactNode;
+}) {
+  return (
+    <Card title={title}>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              {headers.map(
+                (header) => (
+                  <th
+                    key={
+                      header
+                    }
+                  >
+                    {header}
+                  </th>
+                )
+              )}
+            </tr>
+          </thead>
+
+          <tbody>
+            {children || (
+              <tr>
+                <td
+                  colSpan={
+                    headers.length
+                  }
+                >
+                  <Empty
+                    text="No records found in the scanned block range."
+                  />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function Page({
+  title,
+  sub,
+}: {
+  title: string;
+  sub: string;
+}) {
+  return (
+    <div className="pageHead">
+      <span className="eyebrow">
+        ORBIWORLD
+      </span>
+
+      <h2>
+        {title}
+      </h2>
+
+      <p>
+        {sub}
+      </p>
+    </div>
+  );
+}
+
+function Card({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="card">
+      <div className="cardHead">
+        <h3>
+          {title}
+        </h3>
+      </div>
+
+      {children}
+    </section>
+  );
+}
+
+function Metric({
+  title,
+  value,
+  sub,
+}: {
+  title: string;
+  value: string;
+  sub: string;
+}) {
+  return (
+    <div className="metric">
+      <span>
+        {title}
+      </span>
+
+      <b>
+        {value}
+      </b>
+
+      <small>
+        {sub}
+      </small>
+    </div>
+  );
+}
+
+function Row({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="row">
+      <span>
+        {label}
+      </span>
+
+      <b>
+        {value}
+      </b>
+    </div>
+  );
+}
+
+function Progress({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  const safe =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        value
+      )
+    );
+
+  return (
+    <div className="progress">
+      <div>
+        <span>
+          {label}
+        </span>
+
+        <b>
+          {Math.round(
+            safe
+          )}
+          %
+        </b>
+      </div>
+
+      <i
+        style={{
+          width: `${safe}%`,
+        }}
+      />
+    </div>
+  );
+}
+
+function Pill({
+  value,
+}: {
+  value: string;
+}) {
+  const type =
+    value ===
+      "APPROVED" ||
+    value ===
+      "ACTIVE" ||
+    value ===
+      "ACHIEVED"
+      ? "green"
+      : value ===
+          "REJECTED" ||
+        value ===
+          "CLOSED"
+      ? "red"
+      : "yellow";
+
+  return (
+    <span
+      className={`pill ${type}`}
+    >
+      {value}
+    </span>
+  );
+}
+
+function Empty({
+  text,
+}: {
+  text: string;
+}) {
+  return (
+    <div className="empty">
+      {text}
+    </div>
+  );
+}
+
+/* =========================================================
+   STYLES
+========================================================= */
+
+const styles = `
+*{
+  box-sizing:border-box;
+}
+
+body{
+  margin:0;
+  background:#050914;
+  color:#eef2ff;
+  font-family:Inter,Arial,sans-serif;
 }
 
 button,
 input,
-select {
-  font: inherit;
+select{
+  font:inherit;
 }
 
-button {
-  cursor: pointer;
+.shell{
+  min-height:100vh;
+  display:flex;
+  background:#050914;
+}
+
+.sidebar{
+  width:270px;
+  flex:none;
+  border-right:1px solid #182235;
+  background:#070c16;
+  padding:26px 18px;
+  display:flex;
+  flex-direction:column;
+  position:fixed;
+  inset:0 auto 0 0;
+  z-index:20;
+}
+
+.brand{
+  display:flex;
+  gap:12px;
+  align-items:center;
+  padding:5px 10px 28px;
+  border-bottom:1px solid #172033;
 }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: .55;
+.brand img{
+  width:38px;
+  height:38px;
+  object-fit:contain;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+.brand b{
+  display:block;
+  letter-spacing:3px;
+  font-size:17px;
 }
 
-.appShell {
-  min-height: 100vh;
-  display: flex;
-  background: #eef2ff;
+.brand small{
+  display:block;
+  color:#71809a;
+  font-size:9px;
+  letter-spacing:2px;
+  margin-top:4px;
 }
 
-.sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: 250px;
-  padding: 24px 16px;
-  background: #111827;
-  color: white;
-  display: flex;
-  flex-direction: column;
-  z-index: 50;
+.navTitle{
+  font-size:10px;
+  letter-spacing:2px;
+  color:#52627d;
+  font-weight:800;
+  padding:26px 12px 9px;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 5px 10px 24px;
+.navBtn,
+.navGroupButton{
+  width:100%;
+  border:0;
+  background:transparent;
+  color:#91a0b8;
+  padding:12px;
+  border-radius:11px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-align:left;
+  cursor:pointer;
+  margin:2px 0;
 }
 
-.brand img {
-  width: 42px;
-  height: 42px;
-  object-fit: contain;
+.navBtn:hover,
+.navGroupButton:hover,
+.navBtn.active{
+  background:#101a2c;
+  color:#fff;
 }
 
-.brand strong {
-  display: block;
-  font-size: 20px;
-  letter-spacing: .08em;
+.navBtn.active{
+  box-shadow:
+    inset 0 0 0 1px #263b5d;
 }
 
-.brand span {
-  display: block;
-  font-size: 10px;
-  letter-spacing: .25em;
-  opacity: .6;
+.navIcon{
+  width:18px;
+  text-align:center;
+  color:#60a5fa;
 }
 
-.walletMini {
-  margin: 0 4px 22px;
-  padding: 12px;
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 12px;
-  background: rgba(255,255,255,.04);
+.navGroupButton{
+  justify-content:space-between;
+  color:#52627d;
+  font-size:10px;
+  letter-spacing:2px;
+  font-weight:800;
+  margin-top:12px;
 }
 
-.walletMini span {
-  display: block;
-  font-size: 9px;
-  letter-spacing: .16em;
-  opacity: .55;
-  margin-bottom: 5px;
+.sideLink{
+  margin-top:auto;
+  color:#6fa9ff;
+  text-decoration:none;
+  font-size:13px;
+  padding:12px;
 }
 
-.walletMini code {
-  font-size: 12px;
-  color: #d1d5db;
+.main{
+  margin-left:270px;
+  width:calc(100% - 270px);
+  padding:30px 34px 60px;
 }
 
-.nav {
-  display: grid;
-  gap: 5px;
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  align-items:center;
+  margin-bottom:24px;
 }
 
-.navButton {
-  border: 0;
-  background: transparent;
-  color: #9ca3af;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 11px 12px;
-  border-radius: 10px;
-  text-align: left;
-  transition: .15s ease;
+.topbar h1{
+  margin:5px 0 4px;
+  font-size:28px;
 }
 
-.navButton:hover,
-.navButton.selected {
-  background: rgba(255,255,255,.08);
-  color: white;
+.topbar p,
+.pageHead p{
+  margin:0;
+  color:#71809a;
 }
 
-.navButton.selected {
-  box-shadow: inset 3px 0 0 #22c55e;
+.eyebrow{
+  font-size:10px;
+  letter-spacing:2px;
+  color:#6d7f9d;
+  font-weight:800;
 }
 
-.navIcon {
-  width: 22px;
-  text-align: center;
-  font-weight: 700;
+.walletActions{
+  display:flex;
+  align-items:center;
+  gap:9px;
 }
 
-.sidebarBottom {
-  margin-top: auto;
+.walletChip{
+  border:1px solid #263a59;
+  background:#0c1422;
+  border-radius:12px;
+  padding:11px 14px;
+  display:flex;
+  gap:9px;
+  align-items:center;
 }
 
-.contractLink {
-  display: block;
-  padding: 10px 12px;
-  font-size: 12px;
-  color: #9ca3af;
+.walletChip i{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#38d39f;
 }
 
-.networkPill {
-  margin-top: 5px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(34,197,94,.08);
-  color: #86efac;
-  font-size: 11px;
+.primary,
+.secondary,
+.danger{
+  border-radius:10px;
+  padding:12px 16px;
+  cursor:pointer;
+  font-weight:700;
 }
 
-.main {
-  width: calc(100% - 250px);
-  margin-left: 250px;
-  min-height: 100vh;
+.primary{
+  background:#2563eb;
+  color:#fff;
+  border:0;
 }
 
-.header {
-  min-height: 86px;
-  padding: 18px 32px;
-  background: rgba(255,255,255,.88);
-  border-bottom: 1px solid #e5e7eb;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  backdrop-filter: blur(14px);
+.secondary{
+  background:#101827;
+  color:#e8eefb;
+  border:1px solid #2a3b56;
 }
 
-.headerEyebrow,
-.eyebrow,
-.panelEyebrow {
-  display: block;
-  font-size: 10px;
-  letter-spacing: .17em;
-  font-weight: 800;
-  color: #6b7280;
+.danger{
+  background:#7f1d1d;
+  color:#fff;
+  border:0;
 }
 
-.header h1 {
-  margin: 4px 0 0;
-  font-size: 22px;
-  line-height: 1.2;
+.primary:disabled,
+.secondary:disabled,
+.danger:disabled{
+  opacity:.5;
+  cursor:not-allowed;
 }
 
-.headerActions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.notice,
+.error{
+  padding:13px 16px;
+  border-radius:12px;
+  margin-bottom:18px;
+  border:1px solid;
 }
 
-.refreshButton,
-.textButton {
-  border: 0;
-  background: transparent;
-  color: #374151;
-  font-weight: 700;
+.notice{
+  background:#082d47;
+  border-color:#0b587c;
+  color:#9edcff;
 }
 
-.refreshButton:hover,
-.textButton:hover {
-  color: #16a34a;
+.error{
+  background:#35121a;
+  border-color:#6e2535;
+  color:#ffb6c2;
+  display:flex;
+  justify-content:space-between;
+  gap:15px;
 }
 
-.accountChip {
-  padding: 9px 12px;
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
-  border-radius: 999px;
-  font-family: monospace;
-  font-size: 12px;
+.error button{
+  background:none;
+  border:0;
+  color:inherit;
+  cursor:pointer;
 }
 
-.onlineDot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #22c55e;
-  margin-right: 7px;
+.content{
+  max-width:1250px;
 }
 
-.menuButton {
-  display: none;
-  border: 0;
-  background: transparent;
-  font-size: 23px;
+.pageHead{
+  margin:8px 0 22px;
 }
 
-.content {
-  padding: 32px;
-  max-width: 1500px;
-  margin: auto;
+.pageHead h2{
+  margin:5px 0;
+  font-size:24px;
 }
 
-.sectionTitle {
-  margin-bottom: 24px;
+.grid{
+  display:grid;
+  gap:16px;
+  margin-bottom:18px;
 }
 
-.sectionTitle h2 {
-  margin: 5px 0 6px;
-  font-size: 28px;
+.grid.four{
+  grid-template-columns:repeat(4,1fr);
 }
 
-.sectionTitle p {
-  margin: 0;
-  color: #6b7280;
-  max-width: 720px;
-  line-height: 1.6;
+.grid.three{
+  grid-template-columns:repeat(3,1fr);
 }
 
-.statsGrid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 18px;
+.two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-bottom:18px;
 }
 
-.statCard {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 16px;
-  padding: 19px;
-  box-shadow: 0 5px 18px rgba(15,23,42,.04);
+.metric,
+.card,
+.welcome,
+.registrationCard{
+  background:#09111f;
+  border:1px solid #18263c;
+  border-radius:16px;
 }
 
-.statLabel {
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 700;
+.metric{
+  padding:20px;
 }
 
-.statValue {
-  margin-top: 9px;
-  font-size: 24px;
-  font-weight: 800;
-  word-break: break-word;
+.metric span,
+.metric small{
+  display:block;
+  color:#71809a;
 }
 
-.statSub {
-  margin-top: 5px;
-  color: #9ca3af;
-  font-size: 11px;
+.metric b{
+  display:block;
+  font-size:25px;
+  margin:9px 0;
 }
 
-.overviewGrid,
-.businessGrid,
-.withdrawGrid,
-.profileGrid {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 18px;
-  margin-bottom: 18px;
+.metric small{
+  font-size:11px;
 }
 
-.panel {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  padding: 22px;
-  box-shadow: 0 5px 18px rgba(15,23,42,.04);
-  margin-bottom: 18px;
+.card{
+  padding:22px;
+  margin-bottom:18px;
 }
 
-.panelHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 20px;
+.cardHead{
+  margin-bottom:18px;
 }
 
-.panelHeader h3 {
-  margin: 4px 0 0;
-  font-size: 18px;
+.cardHead h3{
+  margin:0;
+  font-size:17px;
 }
 
-.profileSummary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  background: #e5e7eb;
-  border: 1px solid #e5e7eb;
-  overflow: hidden;
-  border-radius: 13px;
+.row{
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  padding:13px 0;
+  border-bottom:1px solid #142033;
 }
 
-.profileSummary > div {
-  background: white;
-  padding: 14px;
+.row:last-child{
+  border-bottom:0;
 }
 
-.profileSummary span {
-  display: block;
-  color: #6b7280;
-  font-size: 11px;
-  margin-bottom: 5px;
+.row span{
+  color:#73839c;
 }
 
-.profileSummary strong {
-  font-size: 14px;
+.row b{
+  font-weight:650;
+  text-align:right;
+  word-break:break-word;
 }
 
-.greenText {
-  color: #16a34a !important;
+.welcome{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:24px;
+  margin-bottom:18px;
+  background:
+    linear-gradient(
+      120deg,
+      #0b1b2d,
+      #09111f
+    );
 }
 
-.packageCard {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 18px;
+.welcome h2{
+  margin:7px 0;
 }
 
-.packageTop {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+.welcome p{
+  margin:0;
+  color:#7e8da5;
 }
 
-.packageLabel {
-  color: #6b7280;
-  font-size: 9px;
-  letter-spacing: .14em;
-  font-weight: 800;
+.walletBalance{
+  text-align:right;
 }
 
-.packageTop h3 {
-  margin: 4px 0 0;
+.walletBalance small{
+  display:block;
+  color:#70819b;
 }
 
-.statusBadge {
-  border-radius: 999px;
-  padding: 6px 9px;
-  font-size: 9px;
-  font-weight: 800;
+.walletBalance b{
+  font-size:28px;
 }
 
-.statusBadge.active {
-  background: #dcfce7;
-  color: #15803d;
+.full{
+  width:100%;
+  margin-top:14px;
 }
 
-.statusBadge.closed {
-  background: #fee2e2;
-  color: #b91c1c;
+.formGrid{
+  display:grid;
+  grid-template-columns:1.3fr 1fr 1fr;
+  gap:10px;
 }
 
-.packageAmount {
-  margin: 20px 0;
-  font-size: 31px;
-  font-weight: 900;
+.formGrid input,
+.formGrid select,
+.refBox input{
+  width:100%;
+  background:#050a13;
+  color:#fff;
+  border:1px solid #25364f;
+  border-radius:10px;
+  padding:13px 14px;
+  outline:none;
 }
 
-.packageGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+.formGrid input:focus,
+.formGrid select:focus,
+.refBox input:focus{
+  border-color:#3b82f6;
 }
 
-.packageGrid div {
-  padding: 11px;
-  border-radius: 10px;
-  background: white;
-  border: 1px solid #e5e7eb;
+.muted{
+  color:#71809a;
 }
 
-.packageGrid span {
-  display: block;
-  font-size: 10px;
-  color: #6b7280;
-  margin-bottom: 4px;
+.tableWrap{
+  overflow:auto;
 }
 
-.packageGrid strong {
-  font-size: 12px;
+.tableWrap table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:650px;
 }
 
-.progressBlock {
-  margin-top: 18px;
+.tableWrap th,
+.tableWrap td{
+  text-align:left;
+  padding:13px 12px;
+  border-bottom:1px solid #142033;
+  font-size:13px;
 }
 
-.progressHeader {
-  display: flex;
-  justify-content: space-between;
-  color: #6b7280;
-  font-size: 11px;
-  margin-bottom: 7px;
+.tableWrap th{
+  color:#667894;
+  font-size:10px;
+  letter-spacing:1px;
+  text-transform:uppercase;
 }
 
-.progressTrack {
-  height: 7px;
-  background: #e5e7eb;
-  border-radius: 99px;
-  overflow: hidden;
+.tableWrap a{
+  color:#69a8ff;
+  text-decoration:none;
 }
 
-.progressFill {
-  height: 100%;
-  background: #22c55e;
-  border-radius: inherit;
+.pill{
+  display:inline-block;
+  padding:5px 9px;
+  border-radius:999px;
+  background:#4a3b14;
+  color:#f7d879;
+  font-size:10px;
+  font-weight:800;
 }
 
-.packageFooter {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 13px;
-  font-size: 10px;
-  color: #6b7280;
+.pill.green{
+  background:#0d3c2c;
+  color:#67e8b1;
 }
 
-.packageList {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 28px;
+.pill.red{
+  background:#451923;
+  color:#ff98a9;
 }
 
-.packageToolbar {
-  padding: 14px 18px;
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 13px;
-  margin-bottom: 14px;
+.rankGrid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:16px;
+  margin-bottom:18px;
 }
-
-.packageToolbar div {
-  display: flex;
-  justify-content: space-between;
-}
-
-.packageToolbar span {
-  color: #6b7280;
-  font-size: 12px;
-}
-
-.historyHeading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 30px 0 14px;
-}
-
-.historyHeading h3 {
-  margin: 0;
-}
-
-.historyHeading span {
-  color: #6b7280;
-  font-size: 12px;
-}
-
-.businessRows {
-  display: grid;
-  gap: 1px;
-  background: #e5e7eb;
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.businessRows > div {
-  background: white;
-  padding: 14px;
-  display: flex;
-  justify-content: space-between;
-  gap: 15px;
-}
-
-.businessRows span {
-  color: #6b7280;
-  font-size: 12px;
+.levelTable{
+  width:100%;
 }
 
-.teamMiniList {
-  display: grid;
-  gap: 8px;
+.levelTableHead,
+.levelTableRow{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  align-items:center;
+  column-gap:20px;
 }
 
-.teamMini {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px;
-  border: 1px solid #e5e7eb;
-  border-radius: 11px;
+.levelTableHead{
+  padding:12px 14px;
+  background:#101b2d;
+  border-radius:10px 10px 0 0;
+  color:#6fa9ff;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:1px;
+  text-transform:uppercase;
 }
 
-.teamMini > div:nth-child(2) {
-  flex: 1;
+.levelTableRow{
+  padding:15px 14px;
+  border-bottom:1px solid #142033;
+  color:#dce5f5;
+  font-size:14px;
 }
 
-.teamMini strong,
-.teamMini span {
-  display: block;
+.levelTableRow:last-child{
+  border-bottom:0;
 }
 
-.teamMini strong {
-  font-size: 12px;
+.levelTableRow>span:nth-child(2){
+  font-weight:700;
 }
 
-.teamMini span {
-  margin-top: 3px;
-  font-size: 10px;
-  color: #6b7280;
+.levelStatus{
+  display:inline-flex;
+  width:max-content;
+  min-width:78px;
+  justify-content:center;
+  padding:6px 11px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.08em;
 }
 
-.teamMini b {
-  font-size: 9px;
-  color: #16a34a;
+.levelStatus.open{
+  background:#0b2a20;
+  border:1px solid #174d3a;
+  color:#4ade80;
 }
 
-.avatar {
-  width: 31px;
-  height: 31px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: #dcfce7;
-  color: #15803d;
-  font-size: 9px;
-  font-weight: 800;
+.levelStatus.pending{
+  background:#251f0d;
+  border:1px solid #4a3b14;
+  color:#f7d879;
 }
 
-.levelGrid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
-}
-
-.levelCard {
-  padding: 15px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #f8fafc;
-}
+@media(max-width:600px){
 
-.levelCard span {
-  display: block;
-  color: #6b7280;
-  font-size: 10px;
-}
+  .levelTableHead,
+  .levelTableRow{
+    grid-template-columns:1fr .8fr 1.2fr;
+    column-gap:10px;
+  }
 
-.levelCard strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 20px;
-}
+  .levelTableHead,
+  .levelTableRow{
+    padding-left:10px;
+    padding-right:10px;
+  }
 
-.walletGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 18px;
 }
-
-.walletBalance {
-  padding: 20px;
-  border-radius: 15px;
-  background: white;
-  border: 1px solid #e5e7eb;
+.rankReward{
+  font-size:24px;
+  font-weight:800;
+  margin-bottom:5px;
 }
 
-.walletBalance span {
-  display: block;
-  color: #6b7280;
-  font-size: 11px;
+.progress{
+  margin:14px 0;
 }
 
-.walletBalance strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 24px;
+.progress>div{
+  display:flex;
+  justify-content:space-between;
+  color:#7c8da7;
+  font-size:11px;
+  margin-bottom:6px;
 }
 
-.fieldLabel {
-  display: block;
-  margin: 13px 0 7px;
-  color: #374151;
-  font-size: 12px;
-  font-weight: 700;
+.progress i{
+  display:block;
+  height:7px;
+  border-radius:99px;
+  background:#2563eb;
+  max-width:100%;
 }
 
-.input {
-  width: 100%;
-  min-height: 44px;
-  padding: 10px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
-  background: white;
-  outline: none;
+.refBox{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:10px;
+  margin-bottom:18px;
 }
 
-.input:focus {
-  border-color: #22c55e;
-  box-shadow: 0 0 0 3px rgba(34,197,94,.1);
+.steps{
+  margin:0;
+  padding-left:20px;
+  color:#9ba9bf;
 }
 
-.primaryButton {
-  width: 100%;
-  min-height: 45px;
-  border: 0;
-  border-radius: 10px;
-  background: #16a34a;
-  color: white;
-  font-weight: 800;
-  margin-top: 15px;
+.steps li{
+  padding:7px;
 }
 
-.primaryButton:hover {
-  background: #15803d;
+.teamRow{
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  padding:14px 0;
+  border-bottom:1px solid #142033;
 }
 
-.stakeForm {
-  display: grid;
-  grid-template-columns: 1fr 220px;
-  align-items: end;
-  gap: 12px;
+.teamRow>div{
+  display:flex;
+  gap:10px;
+  align-items:center;
 }
 
-.stakeForm .primaryButton {
-  margin-top: 0;
+.teamRow span,
+.teamRow small{
+  color:#71809a;
 }
 
-.contractInfo {
-  display: grid;
-  gap: 10px;
+.teamRow small{
+  display:block;
 }
 
-.contractInfo code {
-  padding: 11px;
-  border-radius: 9px;
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
-  word-break: break-all;
-  font-size: 11px;
+.fee{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top:16px;
+  padding:14px;
+  background:#070d17;
+  border-radius:10px;
+  color:#71809a;
 }
 
-.contractInfo a {
-  color: #16a34a;
-  font-weight: 700;
-  font-size: 12px;
+.fee b{
+  color:#fff;
 }
 
-.tableWrap {
-  overflow-x: auto;
+.dangerBox{
+  padding:18px;
+  border:1px solid #6b2731;
+  background:#241017;
+  border-radius:12px;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
+.dangerBox p{
+  color:#c08d96;
+  line-height:1.6;
 }
 
-th,
-td {
-  text-align: left;
-  padding: 13px 10px;
-  border-bottom: 1px solid #eef2f7;
-  white-space: nowrap;
+.registrationCard{
+  max-width:700px;
+  margin:80px auto;
+  padding:42px;
+  text-align:center;
 }
 
-th {
-  color: #6b7280;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .08em;
+.registrationIcon{
+  font-size:34px;
+  color:#60a5fa;
 }
 
-td {
-  font-size: 12px;
+.registrationCard h2{
+  font-size:28px;
+  margin:10px 0;
 }
 
-td code {
-  font-size: 11px;
+.registrationCard p{
+  color:#7787a0;
+  line-height:1.7;
 }
 
-.statusText {
-  font-size: 10px;
-  font-weight: 800;
+.refExplain{
+  margin:20px 0;
+  padding:15px;
+  border:1px solid #1b2a40;
+  background:#070d17;
+  border-radius:12px;
 }
 
-.noticeWrap {
-  padding: 16px 32px 0;
+.refExplain b{
+  display:block;
+  color:#71809a;
+  margin-bottom:8px;
 }
 
-.errorBox,
-.infoBox {
-  padding: 12px 14px;
-  border-radius: 10px;
-  font-size: 12px;
-  line-height: 1.5;
-  margin-bottom: 10px;
+.refExplain code{
+  color:#dce7f7;
 }
 
-.errorBox {
-  background: #fee2e2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
+.registrationCard small{
+  display:block;
+  color:#667893;
+  margin-top:12px;
 }
 
-.infoBox {
-  background: #dcfce7;
-  border: 1px solid #bbf7d0;
-  color: #166534;
+.login{
+  min-height:100vh;
+  width:100%;
+  display:grid;
+  place-items:center;
+  padding:20px;
 }
 
-.emptyState {
-  padding: 38px 20px;
-  text-align: center;
-  border: 1px dashed #d1d5db;
-  border-radius: 14px;
-  background: #f8fafc;
+.loginCard{
+  max-width:520px;
+  text-align:center;
+  background:#09111f;
+  border:1px solid #1c2b42;
+  border-radius:22px;
+  padding:48px;
 }
 
-.emptyIcon {
-  font-size: 28px;
-  color: #9ca3af;
+.loginCard img{
+  width:70px;
+  height:70px;
+  object-fit:contain;
 }
 
-.emptyState h3 {
-  margin: 10px 0 5px;
+.loginCard h1{
+  font-size:30px;
+  margin:14px 0 8px;
 }
 
-.emptyState p {
-  margin: 0 auto;
-  max-width: 500px;
-  color: #6b7280;
-  font-size: 12px;
-  line-height: 1.6;
+.loginCard p{
+  color:#7a8aa3;
+  line-height:1.7;
 }
 
-.loginPage,
-.loadingPage {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: #eef2ff;
+.loginCard .primary{
+  width:100%;
+  margin-top:18px;
 }
 
-.loginCard {
-  width: min(430px, 100%);
-  padding: 34px;
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 20px;
-  box-shadow: 0 20px 60px rgba(15,23,42,.08);
+.loginCard small{
+  display:block;
+  color:#596b86;
+  margin-top:14px;
 }
 
-.logoBox {
-  width: 60px;
-  height: 60px;
-  margin-bottom: 20px;
+.actions{
+  display:flex;
+  gap:10px;
+  margin-top:18px;
 }
 
-.logoBox img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.actions a{
+  text-decoration:none;
 }
 
-.loginCard h1 {
-  margin: 7px 0 10px;
-  font-size: 29px;
+.mobileMenu,
+.mobileClose{
+  display:none;
 }
 
-.loginCard p {
-  color: #6b7280;
-  line-height: 1.65;
-  font-size: 13px;
+.empty{
+  padding:30px;
+  text-align:center;
+  color:#667894;
 }
 
-.networkText {
-  text-align: center;
-  margin-top: 14px;
-  color: #9ca3af;
-  font-size: 10px;
+code{
+  color:#8fc5ff;
 }
 
-.walletPreview {
-  margin: 15px 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f8fafc;
-  font-family: monospace;
-  font-size: 12px;
-  text-align: center;
-}
+@media(max-width:1100px){
 
-.fieldHint {
-  margin-top: 6px;
-  color: #9ca3af;
-  font-size: 10px;
-}
+  .grid.four{
+    grid-template-columns:repeat(2,1fr);
+  }
 
-.loader {
-  width: 35px;
-  height: 35px;
-  border: 3px solid #d1d5db;
-  border-top-color: #16a34a;
-  border-radius: 50%;
-  animation: spin .8s linear infinite;
-}
+  .rankGrid{
+    grid-template-columns:repeat(2,1fr);
+  }
 
-.loadingPage {
-  gap: 12px;
-  color: #6b7280;
-}
+  .formGrid{
+    grid-template-columns:1fr;
+  }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+  .walletActions{
+    flex-wrap:wrap;
+    justify-content:flex-end;
   }
 }
 
-.footer {
-  padding: 25px 32px 35px;
-  color: #9ca3af;
-  font-size: 10px;
-  display: flex;
-  gap: 15px;
+.packageHero{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  padding:18px;
+  margin-bottom:18px;
+  background:#070d17;
+  border:1px solid #1b2a40;
+  border-radius:12px;
 }
 
-.footer a {
-  color: #16a34a;
+.packageHero strong{
+  display:block;
+  margin-top:7px;
+  font-size:28px;
 }
 
-.mobileOverlay {
-  display: none;
+.packageHero small{
+  display:block;
+  margin-top:5px;
+  color:#71809a;
 }
 
-@media (max-width: 1050px) {
-  .statsGrid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .overviewGrid,
-  .businessGrid,
-  .withdrawGrid,
-  .profileGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .packageGrid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .levelGrid {
-    grid-template-columns: repeat(5, 1fr);
-  }
+.packageMetrics{
+  margin-bottom:4px;
 }
 
-@media (max-width: 780px) {
-  .sidebar {
-    transform: translateX(-100%);
-    transition: transform .2s ease;
-  }
+.packageActions{
+  display:flex;
+  gap:10px;
+  margin-top:8px;
+}
 
-  .sidebar.sidebarOpen {
-    transform: translateX(0);
+@media(max-width:600px){
+  .packageHero{
+    align-items:flex-start;
+    flex-direction:column;
   }
-
-  .mobileOverlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,.35);
-    z-index: 40;
-  }
-
-  .main {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .menuButton {
-    display: block;
-  }
-
-  .header {
-    padding: 15px 18px;
-  }
-
-  .headerActions {
-    gap: 5px;
-  }
-
-  .refreshButton {
-    display: none;
-  }
-
-  .accountChip {
-    font-size: 10px;
-  }
-
-  .content {
-    padding: 20px 15px;
-  }
-
-  .noticeWrap {
-    padding: 12px 15px 0;
-  }
-
-  .sectionTitle h2 {
-    font-size: 23px;
-  }
-
-  .statsGrid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .walletGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .stakeForm {
-    grid-template-columns: 1fr;
-  }
-
-  .levelGrid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .footer {
-    padding: 20px 15px;
+  .packageActions{
+    flex-direction:column;
   }
 }
 
-@media (max-width: 500px) {
-  .statsGrid {
-    grid-template-columns: 1fr;
+@media(max-width:780px){
+
+  .sidebar{
+    transform:translateX(-100%);
+    transition:.2s;
   }
 
-  .packageGrid {
-    grid-template-columns: 1fr 1fr;
+  .sidebar.open{
+    transform:translateX(0);
   }
 
-  .packageAmount {
-    font-size: 27px;
+  .mobileClose{
+    display:block;
+    position:absolute;
+    right:12px;
+    top:10px;
+    background:none;
+    border:0;
+    color:#fff;
+    font-size:28px;
   }
 
-  .profileSummary {
-    grid-template-columns: 1fr;
+  .main{
+    margin-left:0;
+    width:100%;
+    padding:20px;
   }
 
-  .header h1 {
-    font-size: 17px;
+  .mobileMenu{
+    display:block;
+    background:#101827;
+    color:#fff;
+    border:1px solid #263852;
+    border-radius:9px;
+    padding:8px 11px;
   }
 
-  .headerEyebrow {
-    font-size: 8px;
+  .topbar{
+    align-items:flex-start;
+    flex-wrap:wrap;
   }
 
-  .loginCard {
-    padding: 25px 20px;
+  .walletActions{
+    width:100%;
+    justify-content:flex-start;
+  }
+
+  .walletChip{
+    flex:1;
+  }
+
+  .two,
+  .grid.three,
+  .grid.four,
+  .rankGrid{
+    grid-template-columns:1fr;
+  }
+    /* =========================================================
+   LEVEL INCOME
+========================================================= */
+
+.levelInfo{
+
+  display:flex;
+
+  flex-direction:column;
+
+}
+
+.levelInfoRow{
+
+  display:flex;
+
+  justify-content:space-between;
+
+  align-items:center;
+
+  gap:20px;
+
+  padding:18px 0;
+
+  border-bottom:1px solid #142033;
+
+}
+
+.levelInfoRow:last-child{
+
+  border-bottom:0;
+
+}
+
+.levelInfoRow > div{
+
+  display:flex;
+
+  flex-direction:column;
+
+  gap:5px;
+
+}
+
+.levelInfoRow strong{
+
+  color:#e7edf7;
+
+  font-size:15px;
+
+}
+
+.levelInfoRow small{
+
+  color:#71809a;
+
+  font-size:12px;
+
+}
+
+.levelInfoRow > span{
+
+  color:#e7edf7;
+
+  font-weight:700;
+
+  text-align:right;
+
+}
+
+.statusBadge{
+
+  display:inline-flex;
+
+  align-items:center;
+
+  padding:6px 10px;
+
+  border-radius:999px;
+
+  background:#0b2a20;
+
+  border:1px solid #174d3a;
+
+  color:#4ade80 !important;
+
+  font-size:11px;
+
+  letter-spacing:.08em;
+
+}
+
+  .welcome{
+    display:block;
+  }
+
+  .walletBalance{
+    text-align:left;
+    margin-top:20px;
+  }
+
+  .refBox{
+    grid-template-columns:1fr;
+  }
+
+  .registrationCard{
+    margin:30px auto;
+    padding:28px;
+  }
+
+  .actions{
+    flex-direction:column;
   }
 }
-`;
+  `;
