@@ -1,421 +1,617 @@
 import { ethers } from "ethers";
 
-/* =========================================================
-   GLOBAL WINDOW
-========================================================= */
+/* ================================================================
+   ORBI WORLD — CONTRACT CONFIGURATION
+   BNB SMART CHAIN TESTNET
+   ================================================================ */
 
-declare global {
-  interface Window {
-    ethereum?: any;
-  }
-}
+export const ORBI_WORLD_ADDRESS =
+  "0x3F2CaA8Ac8A922bD750ae91B0139a6c897C79c82";
 
-/* =========================================================
-   NETWORK
-========================================================= */
+export const MOCUSDT_ADDRESS =
+  "0x9CBe843a4c02916da422aA2dD645f55AEb9d4c91";
 
-export const BSC_TESTNET = {
-  chainId: 97,
-  chainHex: "0x61",
-  name: "BSC Testnet",
-  rpcUrl: "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
-  explorer: "https://testnet.bscscan.com",
-} as const;
+export const BSC_TESTNET_CHAIN_ID = 97;
 
-/* =========================================================
-   DEPLOYED CONTRACTS
-========================================================= */
+export const BSC_TESTNET_RPC =
+  "https://data-seed-prebsc-1-s1.bnbchain.org:8545";
 
-export const CONTRACT_ADDRESS =
-  "0x8c8AbFA4d9CBBCb3420Dc870bCb3B23dbDa3fe61";
+export const BLOCK_EXPLORER =
+  "https://testnet.bscscan.com";
 
-export const USDT_ADDRESS =
-  "0x855c91cF87745e01e370B671f0Da25dcC7685394";
 
-/* =========================================================
-   TOKEN / PLATFORM CONSTANTS
-========================================================= */
+/* ================================================================
+   ORBI WORLD ABI
+   Exact frontend-facing ABI
+   ================================================================ */
 
-export const USDT_DECIMALS = 18;
+export const ORBI_WORLD_ABI = [
 
-export const MAX_PACKAGE_MULTIPLIER = 2;
-
-export const DEFAULT_DAILY_ROI_BPS = 50;
-
-export const DEFAULT_MIN_STAKE = 50;
-
-export const DEFAULT_MIN_TOPUP = 50;
-
-export const DEFAULT_MIN_WITHDRAWAL = 20;
-
-export const DEFAULT_WITHDRAWAL_FEE_BPS = 1000;
-
-/* =========================================================
-   LEVEL INCOME
-   Fresh deployed contract:
-   10%, 5%, 3%, 2%, 1%, 1%, 1%, 1%, 1%, 1%
-========================================================= */
-
-export const LEVEL_INCOME_BPS = [
-  1000,
-  500,
-  300,
-  200,
-  100,
-  100,
-  100,
-  100,
-  100,
-  100,
-] as const;
-
-/* =========================================================
-   USER TUPLE
-========================================================= */
-
-const USER_TUPLE =
-  "tuple(" +
-  "uint256 id," +
-  "address wallet," +
-  "uint256 sponsorId," +
-  "uint8 status," +
-  "uint32 directCount," +
-  "uint32 activeDirectCount," +
-  "uint256 lifetimeBusiness," +
-  "uint256 monthlyBusiness," +
-  "uint256 todayBusiness," +
-  "uint256 powerLegBusiness," +
-  "uint256 otherLegBusiness," +
-  "uint256 earningWallet," +
-  "uint256 rankWallet," +
-  "uint256 royaltyWallet," +
-  "uint256 totalROIIncome," +
-  "uint256 totalLevelIncome," +
-  "uint256 totalRankIncome," +
-  "uint256 totalRoyaltyIncome," +
-  "uint256 totalWithdrawn," +
-  "uint8 rank," +
-  "uint8 royalty)";
-
-/* =========================================================
-   ORBIWORLD ABI
-   Only functions required by the new frontend.
-========================================================= */
-
-export const ORBI_ABI = [
-  /* ---------------- REGISTRATION / STAKING ---------------- */
-
-  "function registerOnly(address sponsorWallet)",
-
-  "function activateAccount(uint256 amount)",
-
-  "function topUp(uint256 amount)",
-
-  /* ---------------- WITHDRAWAL ---------------- */
-
-  "function requestWithdraw(uint8 walletType,uint256 amount)",
-
-  "function emergencyCapitalWithdraw()",
-
-  /* ---------------- USER ---------------- */
-
-  `function myProfile() view returns (${USER_TUPLE})`,
-
-  `function getUser(uint256 userId) view returns (${USER_TUPLE})`,
+  /* ==============================================================
+     USER
+     ============================================================== */
 
   "function getUserId(address wallet) view returns (uint256)",
 
-  "function getSponsor(uint256 userId) view returns (uint256)",
-
   "function getWallet(uint256 userId) view returns (address)",
+
+  "function getUser(uint256 userId) view returns (" +
+    "uint256 id," +
+    "address wallet," +
+    "uint256 sponsorId," +
+    "uint8 status," +
+    "uint32 directCount," +
+    "uint32 activeDirectCount," +
+    "uint256 lifetimeBusiness," +
+    "uint256 monthlyBusiness," +
+    "uint256 todayBusiness," +
+    "uint256 powerLegBusiness," +
+    "uint256 otherLegBusiness," +
+    "uint256 earningWallet," +
+    "uint256 rankWallet," +
+    "uint256 royaltyWallet," +
+    "uint256 totalROIIncome," +
+    "uint256 totalLevelIncome," +
+    "uint256 totalRankIncome," +
+    "uint256 totalRoyaltyIncome," +
+    "uint256 totalWithdrawn," +
+    "uint8 rank," +
+    "uint8 royalty" +
+  ")",
+
+  "function myProfile() view returns (" +
+    "uint256 id," +
+    "address wallet," +
+    "uint256 sponsorId," +
+    "uint8 status," +
+    "uint32 directCount," +
+    "uint32 activeDirectCount," +
+    "uint256 lifetimeBusiness," +
+    "uint256 monthlyBusiness," +
+    "uint256 todayBusiness," +
+    "uint256 powerLegBusiness," +
+    "uint256 otherLegBusiness," +
+    "uint256 earningWallet," +
+    "uint256 rankWallet," +
+    "uint256 royaltyWallet," +
+    "uint256 totalROIIncome," +
+    "uint256 totalLevelIncome," +
+    "uint256 totalRankIncome," +
+    "uint256 totalRoyaltyIncome," +
+    "uint256 totalWithdrawn," +
+    "uint8 rank," +
+    "uint8 royalty" +
+  ")",
+
+  "function getSponsor(uint256 userId) view returns (uint256)",
 
   "function getUserStatus(uint256 userId) view returns (uint8)",
 
   "function isRegistered(address wallet) view returns (bool)",
 
-  /* ---------------- DASHBOARD HELPERS ---------------- */
 
-  `function getDashboardData(uint256 userId) view returns (${USER_TUPLE} user,uint256[] packageIds,uint256[] activePackageIds,uint256[] directReferralIds)`,
+  /* ==============================================================
+     DASHBOARD
+     ============================================================== */
 
-  "function getBusinessStats(uint256 userId) view returns (uint256 lifetimeBusiness,uint256 monthlyBusiness,uint256 todayBusiness,uint256 powerLegBusiness,uint256 otherLegBusiness,uint256 directCount,uint256 activeDirectCount)",
+  "function getDashboardData(uint256 userId) view returns (" +
+    "(" +
+      "uint256 id," +
+      "address wallet," +
+      "uint256 sponsorId," +
+      "uint8 status," +
+      "uint32 directCount," +
+      "uint32 activeDirectCount," +
+      "uint256 lifetimeBusiness," +
+      "uint256 monthlyBusiness," +
+      "uint256 todayBusiness," +
+      "uint256 powerLegBusiness," +
+      "uint256 otherLegBusiness," +
+      "uint256 earningWallet," +
+      "uint256 rankWallet," +
+      "uint256 royaltyWallet," +
+      "uint256 totalROIIncome," +
+      "uint256 totalLevelIncome," +
+      "uint256 totalRankIncome," +
+      "uint256 totalRoyaltyIncome," +
+      "uint256 totalWithdrawn," +
+      "uint8 rank," +
+      "uint8 royalty" +
+    ") user," +
+    "uint256[] packageIds," +
+    "uint256[] activePackageIds," +
+    "uint256[] directReferralIds" +
+  ")",
 
-  "function getDirectReferrals(uint256 userId) view returns (uint256[] memory)",
+  "function getBusinessStats(uint256 userId) view returns (" +
+    "uint256 lifetimeBusiness," +
+    "uint256 monthlyBusiness," +
+    "uint256 todayBusiness," +
+    "uint256 powerLegBusiness," +
+    "uint256 otherLegBusiness," +
+    "uint256 directCount," +
+    "uint256 activeDirectCount" +
+  ")",
 
-  "function getDirectLegBusiness(uint256 sponsorId,uint256 directUserId) view returns (uint256)",
 
-  `function getDirectUsers(uint256 userId) view returns (${USER_TUPLE}[] users)`,
+  /* ==============================================================
+     REFERRAL / TEAM
+     ============================================================== */
 
-  /* ---------------- PACKAGE HELPERS ---------------- */
+  "function getDirectReferrals(uint256 userId) view returns (uint256[])",
 
-  "function getUserPackages(uint256 userId) view returns (uint256[] memory)",
+  "function getDirectLegBusiness(" +
+    "uint256 sponsorId," +
+    "uint256 directUserId" +
+  ") view returns (uint256)",
 
-  "function getActiveUserPackages(uint256 userId) view returns (uint256[] memory)",
+  "function getDirectUsers(uint256 userId) view returns (" +
+    "(" +
+      "uint256 id," +
+      "address wallet," +
+      "uint256 sponsorId," +
+      "uint8 status," +
+      "uint32 directCount," +
+      "uint32 activeDirectCount," +
+      "uint256 lifetimeBusiness," +
+      "uint256 monthlyBusiness," +
+      "uint256 todayBusiness," +
+      "uint256 powerLegBusiness," +
+      "uint256 otherLegBusiness," +
+      "uint256 earningWallet," +
+      "uint256 rankWallet," +
+      "uint256 royaltyWallet," +
+      "uint256 totalROIIncome," +
+      "uint256 totalLevelIncome," +
+      "uint256 totalRankIncome," +
+      "uint256 totalRoyaltyIncome," +
+      "uint256 totalWithdrawn," +
+      "uint8 rank," +
+      "uint8 royalty" +
+    ")[] users" +
+  ")",
 
-  "function getPackages(uint256 userId) view returns (uint256[] memory)",
 
-  "function getActivePackages(uint256 userId) view returns (uint256[] memory)",
+  /* ==============================================================
+     PACKAGES
+     ============================================================== */
 
-  "function getPackageCounts(uint256 userId) view returns (uint256 totalPackages,uint256 activePackages)",
+  "function getUserPackages(uint256 userId) view returns (uint256[])",
 
-  /* ---------------- PACKAGE ---------------- */
+  "function getActiveUserPackages(uint256 userId) view returns (uint256[])",
 
-  "function getPackage(uint256 packageId) view returns (uint256 id,uint256 userId,uint256 amount,uint256 maxPayout,uint256 roiPaid,uint256 levelPaid,uint256 totalPaid,uint256 startTime,uint256 lastProcessedDay,uint256 closedTime,bool emergencyClosed,uint8 status,uint256 queueIndex,uint256 activeUserPackageIndex,bool exists)",
+  "function getPackages(uint256 userId) view returns (uint256[])",
 
-  /* ---------------- SYSTEM ---------------- */
+  "function getActivePackages(uint256 userId) view returns (uint256[])",
 
-  "function paused() view returns (bool)",
+  "function getPackageCounts(uint256 userId) view returns (" +
+    "uint256 totalPackages," +
+    "uint256 activePackages" +
+  ")",
 
-  "function s_systemStats() view returns (uint256 totalUsers,uint256 totalPackages,uint256 totalWithdrawRequests)",
+  "function getPackage(uint256 packageId) view returns (" +
+    "uint256 packageId," +
+    "uint256 userId," +
+    "uint256 amount," +
+    "uint256 maxPayout," +
+    "uint256 roiPaid," +
+    "uint256 levelPaid," +
+    "uint256 totalPaid," +
+    "uint256 startTime," +
+    "uint256 lastProcessedDay," +
+    "uint256 closedTime," +
+    "bool emergencyClosed," +
+    "uint8 status," +
+    "uint256 queueIndex," +
+    "uint256 activeUserPackageIndex," +
+    "bool exists" +
+  ")",
 
-  "function s_businessStats() view returns (uint256 lifetimeBusiness,uint256 currentMonthBusiness,uint256 todayBusiness,uint256 lastBusinessDay,uint256 lastBusinessMonth)",
 
-  "function s_financialStats() view returns (uint256 totalWithdrawn,uint256 totalWithdrawalFees,uint256 totalRankRewardDistributed,uint256 totalRoyaltyDistributed)",
+  /* ==============================================================
+     REGISTRATION
+     ============================================================== */
 
-  /* ---------------- CONFIG ---------------- */
+  "function registerOnly(address sponsorWallet)",
 
-  "function s_roiConfig() view returns (uint16 dailyROIBps)",
 
-  "function s_stakingConfig() view returns (uint256 minimumStake,uint256 minimumTopup)",
+  /* ==============================================================
+     ACCOUNT ACTIVATION / STAKING
+     ============================================================== */
 
-  "function s_withdrawalConfig() view returns (uint256 minimumWithdrawal,uint16 withdrawalFeeBps)",
+  "function activateAccount(uint256 amount)",
 
-  "function s_featureConfig() view returns (bool registrationEnabled,bool stakingEnabled,bool withdrawalEnabled,bool capitalWithdrawalEnabled)",
+  "function topUp(uint256 amount)",
 
-  "function s_levelConfig() view returns (bool levelIncomeEnabled)",
 
-  "function s_rankConfig() view returns (bool rankRewardEnabled)",
+  /* ==============================================================
+     WITHDRAWAL
+     ============================================================== */
 
-  "function s_royaltyConfig() view returns (bool royaltyEnabled)",
+  "function requestWithdraw(uint8 walletType,uint256 amount)",
 
-  /* ---------------- ACCESS CONTROL ---------------- */
+  "function emergencyCapitalWithdraw()",
 
-  "function hasRole(bytes32 role,address account) view returns (bool)",
+
+  /* ==============================================================
+     ERC20 / CONTRACT CONFIG
+     ============================================================== */
+
+  "function i_usdt() view returns (address)",
+
+  "function s_stakingConfig() view returns (" +
+    "uint256 minimumStake," +
+    "uint256 minimumTopup" +
+  ")",
+
+  "function s_roiConfig() view returns (" +
+    "uint16 dailyROIBps" +
+  ")",
+
+  "function s_withdrawalConfig() view returns (" +
+    "uint256 minimumWithdrawal," +
+    "uint16 withdrawalFeeBps" +
+  ")",
+
+  "function s_automationConfig() view returns (" +
+    "uint256 batchSize," +
+    "bool automationEnabled" +
+  ")",
+
+  "function s_featureConfig() view returns (" +
+    "bool registrationEnabled," +
+    "bool stakingEnabled," +
+    "bool withdrawalEnabled," +
+    "bool capitalWithdrawalEnabled" +
+  ")",
+
+  "function s_levelConfig() view returns (" +
+    "uint16[10] levelIncomeBps," +
+    "bool levelIncomeEnabled" +
+  ")",
+
+
+  /* ==============================================================
+     GLOBAL CONSTANTS
+     ============================================================== */
+
+  "function MAX_LEVEL() view returns (uint8)",
+
+  "function MAX_RANK_LEVEL() view returns (uint8)",
+
+  "function MAX_ROYALTY_LEVEL() view returns (uint8)",
+
+  "function MAX_PACKAGE_MULTIPLIER() view returns (uint8)",
+
+  "function BPS_DIVIDER() view returns (uint16)",
+
+  "function PERCENT_DIVIDER() view returns (uint16)",
+
+  "function DAY() view returns (uint256)",
+
+  "function MONTH() view returns (uint256)",
+
+
+  /* ==============================================================
+     SYSTEM STATISTICS
+     ============================================================== */
+
+  "function s_systemStats() view returns (" +
+    "uint256 totalUsers," +
+    "uint256 totalPackages," +
+    "uint256 totalWithdrawRequests" +
+  ")",
+
+  "function s_businessStats() view returns (" +
+    "uint256 lifetimeBusiness," +
+    "uint256 currentMonthBusiness," +
+    "uint256 todayBusiness," +
+    "uint256 lastBusinessDay," +
+    "uint256 lastBusinessMonth" +
+  ")",
+
+  "function s_financialStats() view returns (" +
+    "uint256 totalWithdrawn," +
+    "uint256 totalWithdrawalFees," +
+    "uint256 totalRankRewardDistributed," +
+    "uint256 totalRoyaltyDistributed" +
+  ")",
+
+
+  /* ==============================================================
+     AUTOMATION STATE
+     ============================================================== */
+
+  "function s_automationState() view returns (" +
+    "uint256 processingPointer," +
+    "uint256 activePackageCount," +
+    "uint256 lastProcessingDay," +
+    "uint16 currentMonth," +
+    "uint16 currentYear" +
+  ")",
+
+
+  /* ==============================================================
+     ADMIN / CONFIG
+     ============================================================== */
+
+  "function setStakingConfig(uint256 minimumStake,uint256 minimumTopup)",
+
+  "function setROIConfig(uint16 dailyROIBps)",
+
+  "function setWithdrawalConfig(" +
+    "uint256 minimumWithdrawal," +
+    "uint16 withdrawalFeeBps" +
+  ")",
+
+  "function setFeeWallet(address newFeeWallet)",
+
+  "function setAutomationConfig(uint256 batchSize,bool enabled)",
+
+  "function setFeatureConfig(" +
+    "bool registrationEnabled," +
+    "bool stakingEnabled," +
+    "bool withdrawalEnabled," +
+    "bool capitalWithdrawalEnabled" +
+  ")",
+
+  "function setLevelIncomeEnabled(bool enabled)",
+
+  "function setLevelIncomeBps(uint8 level,uint16 incomeBps)",
+
+  "function setRankRequirement(" +
+    "uint8 rankIndex," +
+    "uint256 requiredPowerLeg," +
+    "uint256 requiredOtherLeg," +
+    "uint256 reward" +
+  ")",
+
+  "function setRankRewardEnabled(bool enabled)",
+
+  "function setRoyaltyRequirement(" +
+    "uint8 level," +
+    "uint256 requiredLifetimeBusiness," +
+    "uint256 requiredMonthlyBusiness," +
+    "uint8 minimumActiveDirects," +
+    "uint16 royaltyBps" +
+  ")",
+
+  "function setRoyaltyEnabled(bool enabled)",
+
+  "function pauseContract()",
+
+  "function unpauseContract()",
 ] as const;
 
-/* =========================================================
-   ERC20 / USDT ABI
-========================================================= */
 
-export const ERC20_ABI = [
+/* ================================================================
+   MOCUSDT ABI
+   ================================================================ */
+
+export const MOCUSDT_ABI = [
+
+  "function name() view returns (string)",
+
+  "function symbol() view returns (string)",
+
   "function decimals() view returns (uint8)",
+
+  "function totalSupply() view returns (uint256)",
 
   "function balanceOf(address account) view returns (uint256)",
 
-  "function allowance(address owner,address spender) view returns (uint256)",
+  "function allowance(address owner_,address spender) view returns (uint256)",
 
   "function approve(address spender,uint256 amount) returns (bool)",
+
+  "function transfer(address to,uint256 amount) returns (bool)",
+
+  "function transferFrom(" +
+    "address from," +
+    "address to," +
+    "uint256 amount" +
+  ") returns (bool)",
+
 ] as const;
 
-/* =========================================================
-   CONTRACT FACTORIES
-========================================================= */
 
-export function getContract(
-  signerOrProvider:
-    | ethers.Signer
-    | ethers.providers.Provider
+/* ================================================================
+   PROVIDER HELPERS
+   ================================================================ */
+
+export function getReadProvider() {
+  return new ethers.JsonRpcProvider(BSC_TESTNET_RPC);
+}
+
+
+/* ================================================================
+   READ CONTRACT
+   ================================================================ */
+
+export function getOrbiWorldReadContract() {
+  const provider = getReadProvider();
+
+  return new ethers.Contract(
+    ORBI_WORLD_ADDRESS,
+    ORBI_WORLD_ABI,
+    provider
+  );
+}
+
+
+/* ================================================================
+   READ MOCUSDT CONTRACT
+   ================================================================ */
+
+export function getMocusdtReadContract() {
+  const provider = getReadProvider();
+
+  return new ethers.Contract(
+    MOCUSDT_ADDRESS,
+    MOCUSDT_ABI,
+    provider
+  );
+}
+
+
+/* ================================================================
+   WRITE CONTRACT
+   Wallet / signer required
+   ================================================================ */
+
+export function getOrbiWorldWriteContract(
+  signer: ethers.Signer
 ) {
   return new ethers.Contract(
-    CONTRACT_ADDRESS,
-    ORBI_ABI,
-    signerOrProvider
+    ORBI_WORLD_ADDRESS,
+    ORBI_WORLD_ABI,
+    signer
   );
 }
 
-export function getUSDTContract(
-  signerOrProvider:
-    | ethers.Signer
-    | ethers.providers.Provider
+
+/* ================================================================
+   WRITE MOCUSDT CONTRACT
+   ================================================================ */
+
+export function getMocusdtWriteContract(
+  signer: ethers.Signer
 ) {
   return new ethers.Contract(
-    USDT_ADDRESS,
-    ERC20_ABI,
-    signerOrProvider
+    MOCUSDT_ADDRESS,
+    MOCUSDT_ABI,
+    signer
   );
 }
 
-/* =========================================================
-   PACKAGE STATUS
-========================================================= */
 
-export enum PackageStatus {
-  ACTIVE = 0,
-  CLOSED = 1,
-}
+/* ================================================================
+   USDT DECIMALS
+   ================================================================ */
 
-/* =========================================================
-   USER STATUS
-========================================================= */
+export const USDT_DECIMALS = 18;
 
-export enum UserStatus {
-  NONE = 0,
-  INACTIVE = 1,
-  ACTIVE = 2,
-  EMERGENCY_EXIT = 3,
-  BLACKLISTED = 4,
-}
 
-/* =========================================================
-   WALLET TYPE
-========================================================= */
-
-export enum WalletType {
-  EARNING = 0,
-  RANK = 1,
-  ROYALTY = 2,
-}
-
-/* =========================================================
-   WITHDRAW STATUS
-========================================================= */
-
-export enum WithdrawStatus {
-  PENDING = 0,
-  APPROVED = 1,
-  REJECTED = 2,
-}
-
-/* =========================================================
-   FORMAT HELPERS
-========================================================= */
-
-export function parseUSDT(amount: string) {
-  return ethers.utils.parseUnits(
-    amount || "0",
-    USDT_DECIMALS
-  );
-}
+/* ================================================================
+   FORMAT USDT
+   ================================================================ */
 
 export function formatUSDT(
-  amount: ethers.BigNumber
-) {
-  return ethers.utils.formatUnits(
-    amount,
-    USDT_DECIMALS
-  );
+  value: bigint | ethers.BigNumberish
+): string {
+  return ethers.formatUnits(value, USDT_DECIMALS);
 }
 
-/* =========================================================
-   NUMBER HELPERS
-========================================================= */
 
-export function toBigNumber(
-  value: any
-): ethers.BigNumber {
-  if (ethers.BigNumber.isBigNumber(value)) {
-    return value;
-  }
+/* ================================================================
+   PARSE USDT
+   ================================================================ */
 
-  if (
-    value === undefined ||
-    value === null
-  ) {
-    return ethers.constants.Zero;
-  }
-
-  return ethers.BigNumber.from(value);
+export function parseUSDT(
+  value: string
+): bigint {
+  return ethers.parseUnits(value, USDT_DECIMALS);
 }
 
-export function toNumber(
-  value: any
-): number {
-  return toBigNumber(value).toNumber();
-}
 
-/* =========================================================
-   ADDRESS HELPERS
-========================================================= */
+/* ================================================================
+   SHORT ADDRESS
+   ================================================================ */
 
 export function shortAddress(
-  address?: string
-) {
-  if (!address) {
-    return "—";
-  }
+  address: string,
+  start = 6,
+  end = 4
+): string {
+  if (!address) return "";
 
-  return `${address.slice(
-    0,
-    6
-  )}...${address.slice(-4)}`;
+  return `${address.slice(0, start)}...${address.slice(-end)}`;
 }
 
-export function explorerAddress(
-  address: string
-) {
-  return `${BSC_TESTNET.explorer}/address/${address}`;
-}
 
-export function explorerTx(
-  hash: string
-) {
-  return `${BSC_TESTNET.explorer}/tx/${hash}`;
-}
+/* ================================================================
+   USER STATUS
+   ================================================================ */
 
-/* =========================================================
-   NETWORK
-========================================================= */
+export const USER_STATUS = {
+  NONE: 0,
+  INACTIVE: 1,
+  ACTIVE: 2,
+  EMERGENCY_EXIT: 3,
+  BLACKLISTED: 4,
+} as const;
 
-export async function ensureBscTestnet() {
-  if (!window.ethereum) {
-    throw new Error(
-      "MetaMask is not installed."
-    );
-  }
 
-  const provider =
-    new ethers.providers.Web3Provider(
-      window.ethereum,
-      "any"
-    );
+/* ================================================================
+   PACKAGE STATUS
+   ================================================================ */
 
-  const network =
-    await provider.getNetwork();
+export const PACKAGE_STATUS = {
+  ACTIVE: 0,
+  CLOSED: 1,
+} as const;
 
-  if (
-    network.chainId ===
-    BSC_TESTNET.chainId
-  ) {
-    return;
-  }
 
-  try {
-    await window.ethereum.request({
-      method:
-        "wallet_switchEthereumChain",
-      params: [
-        {
-          chainId:
-            BSC_TESTNET.chainHex,
-        },
-      ],
-    });
-  } catch {
-    await window.ethereum.request({
-      method:
-        "wallet_addEthereumChain",
-      params: [
-        {
-          chainId:
-            BSC_TESTNET.chainHex,
+/* ================================================================
+   WITHDRAW STATUS
+   ============================================================== */
 
-          chainName:
-            BSC_TESTNET.name,
+export const WITHDRAW_STATUS = {
+  PENDING: 0,
+  APPROVED: 1,
+  REJECTED: 2,
+} as const;
 
-          nativeCurrency: {
-            name: "BNB",
-            symbol: "tBNB",
-            decimals: 18,
-          },
 
-          rpcUrls: [
-            BSC_TESTNET.rpcUrl,
-          ],
+/* ================================================================
+   WALLET TYPE
+   Contract:
+   EARNING = 0
+   RANK    = 1
+   ROYALTY = 2
+   ================================================================ */
 
-          blockExplorerUrls: [
-            BSC_TESTNET.explorer,
-          ],
-        },
-      ],
-    });
-  }
+export const WALLET_TYPE = {
+  EARNING: 0,
+  RANK: 1,
+  ROYALTY: 2,
+} as const;
+
+
+/* ================================================================
+   RANK LEVEL
+   ================================================================ */
+
+export const RANK_LEVEL = {
+  NONE: 0,
+  RANK_1: 1,
+  RANK_2: 2,
+  RANK_3: 3,
+  RANK_4: 4,
+  RANK_5: 5,
+  RANK_6: 6,
+} as const;
+
+
+/* ================================================================
+   ROYALTY LEVEL
+   ================================================================ */
+
+export const ROYALTY_LEVEL = {
+  NONE: 0,
+  ONE_PERCENT: 1,
+  TWO_PERCENT: 2,
+} as const;
+
+/* ================================================================
+   NETWORK HELPER
+   ================================================================ */
+
+export async function isCorrectNetwork(
+  provider: ethers.BrowserProvider
+): Promise<boolean> {
+
+  const network = await provider.getNetwork();
+
+  return Number(network.chainId) === BSC_TESTNET_CHAIN_ID;
 }
