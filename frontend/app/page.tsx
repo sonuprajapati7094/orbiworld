@@ -1,9 +1,95 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { ethers } from "ethers";
+import {
+  BSC_TESTNET_CHAIN_ID,
+  getOrbiWorldReadContract,
+  getOrbiWorldWriteContract,
+  isCorrectNetwork,
+} from "@/lib/contract";
 
 export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [wallet, setWallet] = useState("");
+  const [referral, setReferral] = useState("");
+  const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [registrationMessage, setRegistrationMessage] = useState("");
+
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get("ref")?.trim() || "";
+    if (ref && ethers.isAddress(ref)) setReferral(ethers.getAddress(ref));
+  }, []);
+
+  async function connectAndContinue() {
+    setRegistrationMessage("");
+    const ethereum = (window as any).ethereum;
+    if (!ethereum) {
+      setRegistrationMessage("Please install MetaMask or a compatible Web3 wallet.");
+      setRegistrationOpen(true);
+      return;
+    }
+    try {
+      const provider = new ethers.BrowserProvider(ethereum);
+      await provider.send("eth_requestAccounts", []);
+      if (!(await isCorrectNetwork(provider))) {
+        setRegistrationMessage(`Please switch to BNB Smart Chain Testnet (chain ID ${BSC_TESTNET_CHAIN_ID}).`);
+        setRegistrationOpen(true);
+        return;
+      }
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+      setWallet(address);
+      const readContract = getOrbiWorldReadContract();
+      if (await readContract.isRegistered(address)) {
+        window.location.href = "/dashboard";
+        return;
+      }
+      if (!referral) {
+        setRegistrationMessage("A valid sponsor referral link is required for registration.");
+        setRegistrationOpen(true);
+        return;
+      }
+      if (referral.toLowerCase() === address.toLowerCase()) {
+        setRegistrationMessage("You cannot use your own wallet as sponsor.");
+        setRegistrationOpen(true);
+        return;
+      }
+      if (!(await readContract.isRegistered(referral))) {
+        setRegistrationMessage("The sponsor wallet is not registered on ORBI WORLD.");
+        setRegistrationOpen(true);
+        return;
+      }
+      setRegistrationOpen(true);
+    } catch (error: any) {
+      console.error("Wallet connection error:", error);
+      setRegistrationMessage(error?.shortMessage || error?.message || "Wallet connection failed.");
+      setRegistrationOpen(true);
+    }
+  }
+
+  async function registerUser() {
+    if (!wallet || !referral || registering) return;
+    setRegistering(true);
+    setRegistrationMessage("Confirm the registration transaction in your wallet...");
+    try {
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      if (!(await isCorrectNetwork(provider))) throw new Error("Please switch to BNB Smart Chain Testnet.");
+      const signer = await provider.getSigner();
+      const contract = getOrbiWorldWriteContract(signer);
+      const tx = await contract.registerOnly(referral);
+      setRegistrationMessage("Transaction submitted. Waiting for confirmation...");
+      await tx.wait();
+      setRegistrationMessage("Registration successful. Redirecting...");
+      window.setTimeout(() => { window.location.href = "/dashboard"; }, 700);
+    } catch (error: any) {
+      console.error("Registration error:", error);
+      setRegistrationMessage(error?.shortMessage || error?.reason || error?.message || "Registration failed.");
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#05070b] text-white">
@@ -74,9 +160,9 @@ export default function Home() {
           {/* CONNECT WALLET */}
 
           <div className="hidden md:block">
-            <a href="/dashboard" className="orbi-button">
+            <button type="button" onClick={connectAndContinue} className="orbi-button">
               Connect Wallet
-            </a>
+            </button>
           </div>
 
           {/* MOBILE MENU */}
@@ -130,12 +216,13 @@ export default function Home() {
                 FAQ
               </a>
 
-              <a
-                href="/dashboard"
+              <button
+                type="button"
+                onClick={connectAndContinue}
                 className="orbi-button mt-2 w-full text-center"
               >
                 Connect Wallet
-              </a>
+              </button>
             </div>
           </div>
         )}
@@ -185,12 +272,13 @@ export default function Home() {
             {/* HERO CTA */}
 
             <div className="mt-9 flex w-full flex-col justify-center gap-3 sm:w-auto sm:flex-row">
-              <a
-                href="/dashboard"
+              <button
+                type="button"
+                onClick={connectAndContinue}
                 className="orbi-button min-w-[190px] justify-center text-center"
               >
                 Connect Wallet
-              </a>
+              </button>
 
               <a
                 href="#ecosystem"
@@ -413,12 +501,13 @@ export default function Home() {
                 ecosystem.
               </p>
 
-              <a
-                href="/dashboard"
+              <button
+                type="button"
+                onClick={connectAndContinue}
                 className="orbi-button mt-8 inline-flex"
               >
                 Connect Wallet
-              </a>
+              </button>
             </div>
           </div>
         </div>
@@ -527,6 +616,29 @@ export default function Home() {
           </div>
         </div>
       </footer>
+      {registrationOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1018] p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-white">Join ORBI WORLD</h2>
+                <p className="mt-2 text-sm text-slate-400">Register your wallet on-chain to continue.</p>
+              </div>
+              <button type="button" onClick={() => setRegistrationOpen(false)} disabled={registering} className="text-2xl text-slate-400 hover:text-white">×</button>
+            </div>
+            <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[10px] font-bold tracking-widest text-slate-500">SPONSOR</div>
+              <div className="mt-2 break-all text-sm text-white">{referral || "Not available"}</div>
+            </div>
+            {registrationMessage && <p className="mt-4 break-words text-sm text-slate-300">{registrationMessage}</p>}
+            {wallet && referral && !registrationMessage.includes("not registered") && !registrationMessage.includes("required") && !registrationMessage.includes("own wallet") && (
+              <button type="button" onClick={registerUser} disabled={registering} className="orbi-button mt-6 w-full justify-center disabled:cursor-not-allowed disabled:opacity-50">
+                {registering ? "Registering..." : "Register & Continue"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
