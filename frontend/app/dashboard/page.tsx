@@ -1,7 +1,6 @@
 "use client";
 
 
-
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import {
@@ -2644,6 +2643,325 @@ export default function Dashboard() {
                   </section>
                 </>
               )}
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Earnings") {
+      const roiIncome = user.totalROIIncome;
+      const levelIncome = user.totalLevelIncome;
+      const rankIncome = user.totalRankIncome;
+      const royaltyIncome = user.totalRoyaltyIncome;
+      const totalGenerated =
+        roiIncome + levelIncome + rankIncome + royaltyIncome;
+
+      const packageRoiPaid = packages.reduce(
+        (sum, item) => sum + item.roiPaid,
+        0n
+      );
+      const packageLevelPaid = packages.reduce(
+        (sum, item) => sum + item.levelPaid,
+        0n
+      );
+
+      const incomeRows = [
+        { label: "ROI Income", value: roiIncome, icon: "package" },
+        { label: "Level Income", value: levelIncome, icon: "link" },
+        { label: "Rank Income", value: rankIncome, icon: "trophy" },
+        { label: "Royalty Income", value: royaltyIncome, icon: "diamond" },
+      ];
+
+      const incomeShare = (value: bigint) => {
+        if (totalGenerated <= 0n) return 0;
+        return Math.min(
+          100,
+          Number((value * 10000n) / totalGenerated) / 100
+        );
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN EARNINGS
+              </div>
+              <h1>Earnings<span>.</span></h1>
+              <p>
+                Your complete income summary is calculated from the live ORBI
+                WORLD user profile and package data on-chain.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={refresh}
+              disabled={loading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {loading ? "Refreshing..." : "Refresh"}
+            </button>
+          </section>
+
+          {networkError && (
+            <div className="orbi-alert orbi-alert-warning">
+              <Icon name="alert" size={18} />
+              <span>{networkError}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect the wallet that owns your ORBI WORLD account to view
+                  your on-chain earnings.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL EARNINGS</span>
+                  <strong>${formatUsdt(totalGenerated)}</strong>
+                  <small>ROI + Level + Rank + Royalty</small>
+                </div>
+                <div>
+                  <span>AVAILABLE EARNINGS</span>
+                  <strong>${formatUsdt(user.earningWallet)}</strong>
+                  <small>Current earning wallet balance</small>
+                </div>
+                <div>
+                  <span>TOTAL WITHDRAWN</span>
+                  <strong>${formatUsdt(user.totalWithdrawn)}</strong>
+                  <small>Historical on-chain withdrawals</small>
+                </div>
+                <div>
+                  <span>INCOME SOURCES</span>
+                  <strong>4</strong>
+                  <small>ROI, Level, Rank & Royalty</small>
+                </div>
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">INCOME BREAKDOWN</span>
+                      <h2>Where your earnings came from</h2>
+                      <p>
+                        Cumulative income values are read from your ORBI WORLD
+                        user profile on-chain.
+                      </p>
+                    </div>
+                    <Icon name="money" size={22} />
+                  </div>
+
+                  <div className="orbi-income-list">
+                    {incomeRows.map((row) => {
+                      const share = incomeShare(row.value);
+                      return (
+                        <div key={row.label} style={{ padding: "13px 0" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 12,
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 9,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  display: "grid",
+                                  placeItems: "center",
+                                  borderRadius: 8,
+                                  color: "#9bcfff",
+                                  background: "rgba(22,140,255,.08)",
+                                  border: "1px solid rgba(22,140,255,.14)",
+                                }}
+                              >
+                                <Icon name={row.icon} size={14} />
+                              </span>
+                              <span style={{ color: "#b8c7d9", fontSize: 12 }}>
+                                {row.label}
+                              </span>
+                            </div>
+                            <strong style={{ fontSize: 13 }}>
+                              ${formatUsdt(row.value)}
+                            </strong>
+                          </div>
+                          <div
+                            style={{
+                              height: 5,
+                              marginTop: 9,
+                              borderRadius: 999,
+                              overflow: "hidden",
+                              background: "rgba(148,163,184,.10)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${share}%`,
+                                height: "100%",
+                                borderRadius: 999,
+                                background:
+                                  "linear-gradient(90deg,#168cff,#7357ff)",
+                              }}
+                            />
+                          </div>
+                          <div
+                            style={{
+                              marginTop: 5,
+                              color: "var(--od-muted-2)",
+                              fontSize: 9,
+                            }}
+                          >
+                            {share.toFixed(1)}% of total earnings
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">WALLET SUMMARY</span>
+                      <h2>Income wallets</h2>
+                      <p>
+                        These balances are maintained by the smart contract and
+                        are separate wallet buckets.
+                      </p>
+                    </div>
+                    <Icon name="wallet" size={22} />
+                  </div>
+
+                  <div className="orbi-income-list">
+                    <IncomeRow label="Earning Wallet" value={user.earningWallet} />
+                    <IncomeRow label="Rank Wallet" value={user.rankWallet} />
+                    <IncomeRow label="Royalty Wallet" value={user.royaltyWallet} />
+                    <IncomeRow label="Total Withdrawn" value={user.totalWithdrawn} />
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PACKAGE INCOME</span>
+                    <h2>ROI & Level earnings from packages</h2>
+                    <p>
+                      Package-level paid amounts are aggregated from the live
+                      package records already loaded for this wallet.
+                    </p>
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{packages.length} packages</span>
+                    <strong>${formatUsdt(packageRoiPaid + packageLevelPaid)}</strong>
+                  </div>
+                </div>
+
+                <div
+                  className="orbi-package-overview-grid"
+                  style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+                >
+                  <div>
+                    <span>ROI PAID</span>
+                    <strong>${formatUsdt(packageRoiPaid)}</strong>
+                    <small>Across loaded packages</small>
+                  </div>
+                  <div>
+                    <span>LEVEL PAID</span>
+                    <strong>${formatUsdt(packageLevelPaid)}</strong>
+                    <small>Across loaded packages</small>
+                  </div>
+                  <div>
+                    <span>ACTIVE PACKAGES</span>
+                    <strong>{activePackages.length}</strong>
+                    <small>Currently earning packages</small>
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">EARNINGS ACCOUNTING</span>
+                    <h2>On-chain earnings position</h2>
+                    <p>
+                      The contract credits ROI and Level Income into the Earning
+                      Wallet. Rank and Royalty rewards use their own wallets.
+                    </p>
+                  </div>
+                  <Icon name="activity" size={22} />
+                </div>
+
+                <div className="orbi-activity-grid">
+                  <div>
+                    <span>TOTAL GENERATED</span>
+                    <strong>${formatUsdt(totalGenerated)}</strong>
+                  </div>
+                  <div>
+                    <span>AVAILABLE IN EARNING WALLET</span>
+                    <strong>${formatUsdt(user.earningWallet)}</strong>
+                  </div>
+                  <div>
+                    <span>RANK REWARD BALANCE</span>
+                    <strong>${formatUsdt(user.rankWallet)}</strong>
+                  </div>
+                  <div>
+                    <span>ROYALTY REWARD BALANCE</span>
+                    <strong>${formatUsdt(user.royaltyWallet)}</strong>
+                  </div>
+                </div>
+
+                <div className="orbi-activity-foot">
+                  <span>
+                    All financial values shown here are sourced from the connected
+                    wallet's ORBI WORLD profile and package records.
+                  </span>
+                  <a
+                    href={`${BLOCK_EXPLORER}/address/${wallet}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open wallet on explorer
+                    <Icon name="external" size={14} />
+                  </a>
+                </div>
+              </section>
             </>
           )}
         </>
