@@ -1,5 +1,6 @@
 "use client";
 
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import {
@@ -76,6 +77,11 @@ type PackageData = {
   queueIndex: bigint;
   activeUserPackageIndex: bigint;
   exists: boolean;
+};
+
+type TeamMember = UserData & {
+  teamDepth: number;
+  activityLabel: string;
 };
 
 type DashboardState = {
@@ -400,6 +406,11 @@ export default function Dashboard() {
   const [stakeStep, setStakeStep] = useState<"idle" | "approving" | "staking">("idle");
   const [stakeMessage, setStakeMessage] = useState("");
   const [stakeTxHash, setStakeTxHash] = useState("");
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState("");
+  const [teamLoadedFor, setTeamLoadedFor] = useState("");
+  const [teamIndirectCount, setTeamIndirectCount] = useState<bigint>(0n);
 
   const loadDashboard = useCallback(async (walletAddress: string) => {
     if (!walletAddress) return;
@@ -735,6 +746,104 @@ export default function Dashboard() {
     };
   }, [provider, wallet, loadDashboard]);
 
+  const loadMyTeam = useCallback(async (userId: bigint, currentWallet: string) => {
+    if (!currentWallet || userId === 0n) {
+      setTeamMembers([]);
+      setTeamIndirectCount(0n);
+      setTeamLoadedFor("");
+      return;
+    }
+
+    try {
+      setTeamLoading(true);
+      setTeamError("");
+
+      const contract = getOrbiWorldReadContract();
+      const directUsersRaw = await contract.getDirectUsers(userId);
+      const directUsers = Array.isArray(directUsersRaw)
+        ? directUsersRaw.map(normalizeUser)
+        : [];
+
+      const members: TeamMember[] = directUsers.map((member) => ({
+        ...member,
+        teamDepth: 1,
+        activityLabel:
+          member.status === BigInt(USER_STATUS.ACTIVE)
+            ? "Active"
+            : member.status === BigInt(USER_STATUS.BLACKLISTED)
+              ? "Blacklisted"
+              : member.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+                ? "Emergency Exit"
+                : "Inactive",
+      }));
+
+      // Count every descendant below the direct level. IDs are read from the
+      // contract and deduplicated so a member is counted only once.
+      const visited = new Set<string>([userId.toString()]);
+      const directIds = members.map((member) => member.id);
+      directIds.forEach((id) => visited.add(id.toString()));
+
+      let frontier = directIds;
+      let indirectCount = 0n;
+      let safetyRounds = 0;
+
+      while (frontier.length > 0 && safetyRounds < 100) {
+        safetyRounds += 1;
+        const nextIds: bigint[] = [];
+
+        for (let start = 0; start < frontier.length; start += 10) {
+          const batch = frontier.slice(start, start + 10);
+          const children = await Promise.all(
+            batch.map(async (parentId) => {
+              try {
+                const ids = await contract.getDirectReferrals(parentId);
+                return Array.isArray(ids) ? ids.map(toBigInt) : [];
+              } catch {
+                return [];
+              }
+            })
+          );
+
+          for (const ids of children) {
+            for (const childId of ids) {
+              const key = childId.toString();
+              if (childId === 0n || visited.has(key)) continue;
+              visited.add(key);
+              indirectCount += 1n;
+              nextIds.push(childId);
+            }
+          }
+        }
+
+        frontier = nextIds;
+      }
+
+      setTeamIndirectCount(indirectCount);
+      setTeamMembers(members);
+      setTeamLoadedFor(currentWallet.toLowerCase());
+    } catch (err) {
+      console.error("My Team load failed:", err);
+      setTeamMembers([]);
+      setTeamIndirectCount(0n);
+      setTeamError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load your direct team members."
+      );
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "My Team" && wallet && dashboard.user.id > 0n) {
+      const normalizedWallet = wallet.toLowerCase();
+      if (teamLoadedFor !== normalizedWallet) {
+        loadMyTeam(dashboard.user.id, wallet);
+      }
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
   const user = dashboard.user;
 
   const activePackages = useMemo(
@@ -1034,6 +1143,247 @@ export default function Dashboard() {
                         </article>
                       );
                     })}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "My Team") {
+      const totalDirects = dashboard.user.directCount;
+      const activeDirects = dashboard.user.activeDirectCount;
+      const inactiveDirects =
+        totalDirects > activeDirects ? totalDirects - activeDirects : 0n;
+      const totalIndirects = teamIndirectCount;
+
+      const refreshTeam = async () => {
+        if (!wallet || dashboard.user.id === 0n) return;
+        setTeamLoadedFor("");
+        await loadMyTeam(dashboard.user.id, wallet);
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN TEAM
+              </div>
+              <h1>My Team<span>.</span></h1>
+              <p>
+                Your direct referral network is loaded directly from the ORBI
+                WORLD smart contract.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={refreshTeam}
+              disabled={teamLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {teamLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {networkError && (
+            <div className="orbi-alert orbi-alert-warning">
+              <Icon name="alert" size={18} />
+              <span>{networkError}</span>
+            </div>
+          )}
+
+          {teamError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{teamError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect the wallet that owns your ORBI WORLD account to load
+                  your team from the blockchain.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL DIRECTS</span>
+                  <strong>{totalDirects.toString()}</strong>
+                  <small>Direct referrals</small>
+                </div>
+                <div>
+                  <span>TOTAL INDIRECTS</span>
+                  <strong>{totalIndirects.toString()}</strong>
+                  <small>All descendants below direct level</small>
+                </div>
+                <div>
+                  <span>ACTIVE DIRECTS</span>
+                  <strong>{activeDirects.toString()}</strong>
+                  <small>Currently active</small>
+                </div>
+                <div>
+                  <span>INACTIVE DIRECTS</span>
+                  <strong>{inactiveDirects.toString()}</strong>
+                  <small>Not currently active</small>
+                </div>
+                <div>
+                  <span>TEAM BUSINESS</span>
+                  <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
+                  <small>Lifetime on-chain business</small>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section" style={{ width: "100%" }}>
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">DIRECT MEMBERS</span>
+                    <h2>Your direct team</h2>
+                    <p>
+                      Member information is read from the smart contract. No
+                      team data is manually stored in the frontend.
+                    </p>
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{teamMembers.length} direct members loaded</span>
+                  </div>
+                </div>
+
+                {teamLoading ? (
+                  <div className="orbi-empty-state">
+                    <div className="orbi-empty-icon">
+                      <Icon name="refresh" size={24} />
+                    </div>
+                    <h3>Loading your team...</h3>
+                    <p>Reading direct members from the ORBI WORLD contract.</p>
+                  </div>
+                ) : teamMembers.length === 0 ? (
+                  <div className="orbi-empty-state">
+                    <div className="orbi-empty-icon">
+                      <Icon name="team" size={24} />
+                    </div>
+                    <h3>No direct members yet</h3>
+                    <p>
+                      Share your referral link and registered members will
+                      appear here automatically.
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ width: "100%", overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        minWidth: 1080,
+                        borderCollapse: "collapse",
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          {[
+                            "USER ID",
+                            "WALLET",
+                            "STATUS",
+                            "DIRECTS",
+                            "ACTIVE DIRECTS",
+                            "LIFETIME BUSINESS",
+                            "RANK",
+                            "ACTIVITY",
+                          ].map((heading) => (
+                            <th
+                              key={heading}
+                              style={{
+                                textAlign: "left",
+                                padding: "14px 12px",
+                                borderBottom: "1px solid rgba(148,163,184,.18)",
+                                whiteSpace: "nowrap",
+                                fontSize: 11,
+                                letterSpacing: ".08em",
+                                opacity: 0.7,
+                              }}
+                            >
+                              {heading}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamMembers.map((member) => {
+                          const isActive =
+                            member.status === BigInt(USER_STATUS.ACTIVE);
+                          return (
+                            <tr key={member.id.toString()}>
+                              <td style={{ padding: "15px 12px", fontWeight: 700 }}>
+                                #{member.id.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                {shortAddress(member.wallet)}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 7,
+                                    padding: "6px 9px",
+                                    borderRadius: 999,
+                                    background: isActive
+                                      ? "rgba(34,197,94,.12)"
+                                      : "rgba(148,163,184,.10)",
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: 6,
+                                      height: 6,
+                                      borderRadius: "50%",
+                                      background: isActive ? "#22c55e" : "#94a3b8",
+                                    }}
+                                  />
+                                  {member.activityLabel}
+                                </span>
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.directCount.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.activeDirectCount.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                ${formatUsdt(member.lifetimeBusiness)}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.rank.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                {member.activityLabel}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </section>
