@@ -23,7 +23,10 @@ const ORBI_WORLD_SPENDER_ADDRESS = "0x3F2CaA8Ac8A922bD750ae91B0139a6c897C79c82";
 // Minimal ABI kept local so the Level Income module can read its own
 // configuration/history without changing the existing contract helper.
 const LEVEL_INCOME_READ_ABI = [
-  "function s_levelConfig() view returns (uint16[10] levelIncomeBps,bool levelIncomeEnabled)",
+  // Solidity omits the fixed-size array from the generated public getter.
+  // The generated getter is indexed: s_levelConfig(uint256)
+  // => (uint16 levelIncomeBps, bool levelIncomeEnabled).
+  "function s_levelConfig(uint256 index) view returns (uint16 levelIncomeBps,bool levelIncomeEnabled)",
   "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
 ] as const;
 
@@ -887,12 +890,23 @@ export default function Dashboard() {
         rpc
       );
 
-      const config = await levelContract.s_levelConfig();
-      const rawBps = Array.from(config?.levelIncomeBps ?? config?.[0] ?? []);
-      setLevelIncomeBps(
-        Array.from({ length: 10 }, (_, index) => toBigInt(rawBps[index]))
+      // `s_levelConfig` is a public struct containing a fixed-size array.
+      // Solidity exposes the array element through an indexed getter rather
+      // than returning the whole fixed-size array in one call.
+      const configRows = await Promise.all(
+        Array.from({ length: 10 }, (_, index) =>
+          levelContract.s_levelConfig(index)
+        )
       );
-      setLevelIncomeEnabled(Boolean(config?.levelIncomeEnabled ?? config?.[1]));
+
+      const rawBps = configRows.map((row: any) =>
+        toBigInt(row?.levelIncomeBps ?? row?.[0])
+      );
+
+      setLevelIncomeBps(rawBps);
+      setLevelIncomeEnabled(
+        Boolean(configRows[0]?.levelIncomeEnabled ?? configRows[0]?.[1])
+      );
 
       // Public BSC RPC endpoints can reject very large eth_getLogs ranges.
       // Read the recent deployment window in bounded chunks, then keep only
