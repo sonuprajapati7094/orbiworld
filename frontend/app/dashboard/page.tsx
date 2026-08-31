@@ -20,6 +20,13 @@ import {
 // ERC20 spender for MOCUSDT approvals. This must match the deployed ORBI WORLD contract.
 const ORBI_WORLD_SPENDER_ADDRESS = "0x3F2CaA8Ac8A922bD750ae91B0139a6c897C79c82";
 
+// Minimal ABI kept local so the Level Income module can read its own
+// configuration/history without changing the existing contract helper.
+const LEVEL_INCOME_READ_ABI = [
+  "function s_levelConfig() view returns (uint16[10] levelIncomeBps,bool levelIncomeEnabled)",
+  "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
+] as const;
+
 /* =========================================================
    ORBI WORLD — DECENTRALIZED DASHBOARD
    Source of truth:
@@ -82,6 +89,15 @@ type PackageData = {
 type TeamMember = UserData & {
   teamDepth: number;
   activityLabel: string;
+};
+
+type LevelIncomeEntry = {
+  fromUserId: bigint;
+  toUserId: bigint;
+  level: bigint;
+  amount: bigint;
+  blockNumber: number;
+  timestamp: number;
 };
 
 type DashboardState = {
@@ -411,6 +427,11 @@ export default function Dashboard() {
   const [teamError, setTeamError] = useState("");
   const [teamLoadedFor, setTeamLoadedFor] = useState("");
   const [teamIndirectCount, setTeamIndirectCount] = useState<bigint>(0n);
+  const [levelIncomeBps, setLevelIncomeBps] = useState<bigint[]>(Array(10).fill(0n));
+  const [levelIncomeEnabled, setLevelIncomeEnabled] = useState(false);
+  const [levelIncomeHistory, setLevelIncomeHistory] = useState<LevelIncomeEntry[]>([]);
+  const [levelIncomeLoading, setLevelIncomeLoading] = useState(false);
+  const [levelIncomeError, setLevelIncomeError] = useState("");
 
   const loadDashboard = useCallback(async (walletAddress: string) => {
     if (!walletAddress) return;
@@ -843,6 +864,93 @@ export default function Dashboard() {
       }
     }
   }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
+  const loadLevelIncome = useCallback(async (userId: bigint) => {
+    if (userId === 0n) {
+      setLevelIncomeBps(Array(10).fill(0n));
+      setLevelIncomeEnabled(false);
+      setLevelIncomeHistory([]);
+      setLevelIncomeError("");
+      return;
+    }
+
+    try {
+      setLevelIncomeLoading(true);
+      setLevelIncomeError("");
+
+      const rpc = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+      const levelContract = new ethers.Contract(
+        ORBI_WORLD_SPENDER_ADDRESS,
+        LEVEL_INCOME_READ_ABI,
+        rpc
+      );
+
+      const config = await levelContract.s_levelConfig();
+      const rawBps = Array.from(config?.levelIncomeBps ?? config?.[0] ?? []);
+      setLevelIncomeBps(
+        Array.from({ length: 10 }, (_, index) => toBigInt(rawBps[index]))
+      );
+      setLevelIncomeEnabled(Boolean(config?.levelIncomeEnabled ?? config?.[1]));
+
+      // Public BSC RPC endpoints can reject very large eth_getLogs ranges.
+      // Read the recent deployment window in bounded chunks, then keep only
+      // the latest 50 payouts for the dashboard history.
+      const filter = levelContract.filters.LevelIncomePaid(null, userId, null);
+      const latestBlock = await rpc.getBlockNumber();
+      const fromBlock = Math.max(0, latestBlock - 500_000);
+      const chunkSize = 50_000;
+      const logs: any[] = [];
+
+      for (let start = fromBlock; start <= latestBlock; start += chunkSize + 1) {
+        const end = Math.min(latestBlock, start + chunkSize);
+        const chunk = await levelContract.queryFilter(filter, start, end);
+        logs.push(...chunk);
+      }
+
+      const recentLogs = logs.slice(-50).reverse();
+      const entries: LevelIncomeEntry[] = await Promise.all(
+        recentLogs.map(async (log: any) => {
+          const args = log.args;
+          let timestamp = 0;
+          try {
+            const block = await rpc.getBlock(log.blockNumber);
+            timestamp = block?.timestamp ?? 0;
+          } catch {
+            timestamp = 0;
+          }
+
+          return {
+            fromUserId: toBigInt(args?.fromUserId ?? args?.[0]),
+            toUserId: toBigInt(args?.toUserId ?? args?.[1]),
+            level: toBigInt(args?.level ?? args?.[2]),
+            amount: toBigInt(args?.amount ?? args?.[3]),
+            blockNumber: Number(log.blockNumber ?? 0),
+            timestamp,
+          };
+        })
+      );
+
+      setLevelIncomeHistory(entries);
+    } catch (err) {
+      console.error("Level Income load failed:", err);
+      setLevelIncomeHistory([]);
+      setLevelIncomeError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load Level Income configuration/history from the blockchain."
+      );
+    } finally {
+      setLevelIncomeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "Level Income" && wallet && dashboard.user.id > 0n) {
+      loadLevelIncome(dashboard.user.id);
+    }
+  }, [activeNav, wallet, dashboard.user.id, loadLevelIncome]);
 
   const user = dashboard.user;
 
@@ -1382,6 +1490,226 @@ export default function Dashboard() {
                             </tr>
                           );
                         })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Level Income") {
+      const qualifiedLevelCount =
+        user.status === BigInt(USER_STATUS.ACTIVE) && activePackages.length > 0
+          ? Math.min(10, Number(user.activeDirectCount))
+          : 0;
+
+      const earnedByLevel = Array(10).fill(0n) as bigint[];
+      for (const entry of levelIncomeHistory) {
+        const index = Number(entry.level) - 1;
+        if (index >= 0 && index < 10) {
+          earnedByLevel[index] += entry.amount;
+        }
+      }
+
+      const formatLevelPercent = (bps: bigint) => {
+        const percent = Number(bps) / 100;
+        if (!Number.isFinite(percent)) return "0%";
+        return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(2)}%`;
+      };
+
+      const formatHistoryDate = (timestamp: number) => {
+        if (!timestamp) return "—";
+        return new Date(timestamp * 1000).toLocaleDateString("en-US", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN INCOME
+              </div>
+              <h1>Level Income<span>.</span></h1>
+              <p>
+                Your 10-level income qualification, rates and paid income are
+                read directly from the ORBI WORLD smart contract.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={() => loadLevelIncome(user.id)}
+              disabled={levelIncomeLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {levelIncomeLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {levelIncomeError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{levelIncomeError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect the wallet that owns your ORBI WORLD account to view
+                  Level Income data.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid orbi-level-overview"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL LEVEL INCOME</span>
+                  <strong>${formatUsdt(user.totalLevelIncome)}</strong>
+                  <small>Cumulative on-chain income</small>
+                </div>
+                <div>
+                  <span>CURRENT LEVEL</span>
+                  <strong>{qualifiedLevelCount > 0 ? `L${qualifiedLevelCount}` : "NONE"}</strong>
+                  <small>Highest currently qualified</small>
+                </div>
+                <div>
+                  <span>ACTIVE DIRECTS</span>
+                  <strong>{user.activeDirectCount.toString()}</strong>
+                  <small>Qualification count</small>
+                </div>
+                <div>
+                  <span>LEVEL SYSTEM</span>
+                  <strong>{levelIncomeEnabled ? "ACTIVE" : "OFF"}</strong>
+                  <small>Contract configuration</small>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section orbi-level-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">LEVEL INCOME PLAN</span>
+                    <h2>10-Level qualification</h2>
+                    <p>
+                      A level requires the same number of active direct members.
+                      Skipped/inactive uplines do not receive income on-chain.
+                    </p>
+                  </div>
+                  <div className={`orbi-level-system-pill ${levelIncomeEnabled ? "is-on" : "is-off"}`}>
+                    {levelIncomeEnabled ? "ENABLED" : "DISABLED"}
+                  </div>
+                </div>
+
+                <div className="orbi-level-table-wrap">
+                  <table className="orbi-level-table">
+                    <thead>
+                      <tr>
+                        <th>LEVEL</th>
+                        <th>RATE</th>
+                        <th>REQUIRED</th>
+                        <th>STATUS</th>
+                        <th>PAID HISTORY</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: 10 }, (_, index) => {
+                        const level = index + 1;
+                        const unlocked =
+                          levelIncomeEnabled &&
+                          user.status === BigInt(USER_STATUS.ACTIVE) &&
+                          activePackages.length > 0 &&
+                          Number(user.activeDirectCount) >= level;
+
+                        return (
+                          <tr key={level} className={unlocked ? "is-unlocked" : ""}>
+                            <td><strong>L{level}</strong></td>
+                            <td><strong>{formatLevelPercent(levelIncomeBps[index] ?? 0n)}</strong></td>
+                            <td>{level} Active Direct{level === 1 ? "" : "s"}</td>
+                            <td>
+                              <span className={`orbi-level-status ${unlocked ? "unlocked" : "locked"}`}>
+                                <span />
+                                {unlocked ? "UNLOCKED" : "LOCKED"}
+                              </span>
+                            </td>
+                            <td>${formatUsdt(earnedByLevel[index] ?? 0n)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section orbi-level-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PAYOUT HISTORY</span>
+                    <h2>Recent Level Income</h2>
+                    <p>
+                      Recent LevelIncomePaid events where this wallet was the
+                      receiving user.
+                    </p>
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{levelIncomeHistory.length} events indexed</span>
+                  </div>
+                </div>
+
+                {levelIncomeLoading ? (
+                  <div className="orbi-no-data">
+                    <Icon name="refresh" size={24} />
+                    <span>Reading Level Income events from blockchain...</span>
+                  </div>
+                ) : levelIncomeHistory.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="money" size={24} />
+                    <span>No Level Income payouts found yet.</span>
+                    <small>Your cumulative total remains sourced from the user profile.</small>
+                  </div>
+                ) : (
+                  <div className="orbi-level-history-wrap">
+                    <table className="orbi-level-table">
+                      <thead>
+                        <tr>
+                          <th>LEVEL</th>
+                          <th>FROM USER</th>
+                          <th>AMOUNT</th>
+                          <th>DATE</th>
+                          <th>BLOCK</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {levelIncomeHistory.map((entry, index) => (
+                          <tr key={`${entry.blockNumber}-${index}`}>
+                            <td><strong>L{entry.level.toString()}</strong></td>
+                            <td>#{entry.fromUserId.toString()}</td>
+                            <td><strong>${formatUsdt(entry.amount)}</strong></td>
+                            <td>{formatHistoryDate(entry.timestamp)}</td>
+                            <td>#{entry.blockNumber.toLocaleString("en-US")}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -2749,6 +3077,124 @@ export default function Dashboard() {
         .orbi-no-data {
           border: 1px dashed rgba(38, 55, 80, 0.75);
           border-radius: 13px;
+        }
+
+        .orbi-level-section {
+          overflow: hidden;
+        }
+
+        .orbi-level-system-pill {
+          flex: 0 0 auto;
+          padding: 7px 10px;
+          border-radius: 999px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .12em;
+          border: 1px solid rgba(139,155,176,.16);
+          background: rgba(139,155,176,.06);
+          color: var(--od-muted);
+        }
+
+        .orbi-level-system-pill.is-on {
+          color: #86efac;
+          border-color: rgba(34,197,94,.2);
+          background: rgba(34,197,94,.07);
+        }
+
+        .orbi-level-table-wrap,
+        .orbi-level-history-wrap {
+          width: 100%;
+          overflow-x: auto;
+          border: 1px solid rgba(38,55,80,.65);
+          border-radius: 12px;
+        }
+
+        .orbi-level-table {
+          width: 100%;
+          min-width: 760px;
+          border-collapse: collapse;
+        }
+
+        .orbi-level-table th {
+          padding: 12px 13px;
+          text-align: left;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          background: rgba(14,21,34,.68);
+          border-bottom: 1px solid rgba(38,55,80,.65);
+          white-space: nowrap;
+        }
+
+        .orbi-level-table td {
+          padding: 13px;
+          color: #b8c7d9;
+          font-size: 11px;
+          border-bottom: 1px solid rgba(38,55,80,.42);
+          white-space: nowrap;
+        }
+
+        .orbi-level-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .orbi-level-table tbody tr.is-unlocked {
+          background: rgba(22,140,255,.035);
+        }
+
+        .orbi-level-table td strong {
+          color: #eef4fb;
+        }
+
+        .orbi-level-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .08em;
+        }
+
+        .orbi-level-status > span {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          display: inline-block;
+        }
+
+        .orbi-level-status.unlocked {
+          color: #86efac;
+          background: rgba(34,197,94,.08);
+          border: 1px solid rgba(34,197,94,.15);
+        }
+
+        .orbi-level-status.unlocked > span {
+          background: #22c55e;
+          box-shadow: 0 0 8px rgba(34,197,94,.55);
+        }
+
+        .orbi-level-status.locked {
+          color: #8fa0b5;
+          background: rgba(139,155,176,.06);
+          border: 1px solid rgba(139,155,176,.12);
+        }
+
+        .orbi-level-status.locked > span {
+          background: #718096;
+        }
+
+        .orbi-level-history-wrap {
+          max-height: 520px;
+          overflow-y: auto;
+        }
+
+        .orbi-level-history-wrap .orbi-level-table thead th {
+          position: sticky;
+          top: 0;
+          z-index: 2;
         }
 
         .orbi-empty-section {
