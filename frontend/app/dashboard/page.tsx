@@ -23,15 +23,7 @@ const ORBI_WORLD_SPENDER_ADDRESS = "0x3F2CaA8Ac8A922bD750ae91B0139a6c897C79c82";
 // Minimal ABI kept local so the Level Income module can read its own
 // configuration/history without changing the existing contract helper.
 const LEVEL_INCOME_READ_ABI = [
-  // Solidity's public getter for a struct omits the fixed-size array and
-  // exposes only the scalar member of the struct.
-  // Current deployed contract: s_levelConfig() => (bool levelIncomeEnabled).
-  "function s_levelConfig() view returns (bool levelIncomeEnabled)",
-  "event LevelConfigUpdated(bool levelIncomeEnabled)",
-  // The 10 level percentages are stored in the fixed array, which has no
-  // direct public getter. The contract emits this event whenever a level
-  // percentage is changed, so the latest value per level can be reconstructed.
-  "event LevelIncomeUpdated(uint8 indexed level,uint16 incomeBps)",
+  "function s_levelConfig() view returns (uint16[10] levelIncomeBps,bool levelIncomeEnabled)",
   "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
 ] as const;
 
@@ -895,48 +887,29 @@ export default function Dashboard() {
         rpc
       );
 
-      // IMPORTANT: the deployed contract's public struct getter returns only
-      // the non-array member. Calling s_levelConfig(index) does not exist and
-      // causes CALL_EXCEPTION. Read the scalar getter exactly as deployed.
       const config = await levelContract.s_levelConfig();
-      setLevelIncomeEnabled(
-        Boolean(config?.levelIncomeEnabled ?? config?.[0])
+      const rawBps = Array.from(config?.levelIncomeBps ?? config?.[0] ?? []);
+      setLevelIncomeBps(
+        Array.from({ length: 10 }, (_, index) => toBigInt(rawBps[index]))
       );
+      setLevelIncomeEnabled(Boolean(config?.levelIncomeEnabled ?? config?.[1]));
 
-      // The fixed-size levelIncomeBps array is omitted from Solidity's public
-      // struct getter. Its values are maintained through LevelIncomeUpdated
-      // events, so reconstruct the latest value for each of the 10 levels.
-      // We use the same bounded block strategy as the payout history below.
+      // Public BSC RPC endpoints can reject very large eth_getLogs ranges.
+      // Read the recent deployment window in bounded chunks, then keep only
+      // the latest 50 payouts for the dashboard history.
+      const filter = levelContract.filters.LevelIncomePaid(null, userId, null);
       const latestBlock = await rpc.getBlockNumber();
       const fromBlock = Math.max(0, latestBlock - 500_000);
       const chunkSize = 50_000;
-
-      const configLogs: any[] = [];
-      const payoutLogs: any[] = [];
-
-      const configFilter = levelContract.filters.LevelIncomeUpdated();
-      const payoutFilter = levelContract.filters.LevelIncomePaid(null, userId, null);
+      const logs: any[] = [];
 
       for (let start = fromBlock; start <= latestBlock; start += chunkSize + 1) {
         const end = Math.min(latestBlock, start + chunkSize);
-        const [configChunk, payoutChunk] = await Promise.all([
-          levelContract.queryFilter(configFilter, start, end),
-          levelContract.queryFilter(payoutFilter, start, end),
-        ]);
-        configLogs.push(...configChunk);
-        payoutLogs.push(...payoutChunk);
+        const chunk = await levelContract.queryFilter(filter, start, end);
+        logs.push(...chunk);
       }
 
-      const rawBps = Array(10).fill(0n) as bigint[];
-      for (const log of configLogs) {
-        const level = Number(log.args?.level ?? log.args?.[0] ?? -1);
-        if (level >= 0 && level < 10) {
-          rawBps[level] = toBigInt(log.args?.incomeBps ?? log.args?.[1]);
-        }
-      }
-      setLevelIncomeBps(rawBps);
-
-      const recentLogs = payoutLogs.slice(-50).reverse();
+      const recentLogs = logs.slice(-50).reverse();
       const entries: LevelIncomeEntry[] = await Promise.all(
         recentLogs.map(async (log: any) => {
           const args = log.args;
