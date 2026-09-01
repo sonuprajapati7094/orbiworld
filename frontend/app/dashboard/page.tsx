@@ -493,6 +493,14 @@ export default function Dashboard() {
   const [withdrawalMessage, setWithdrawalMessage] = useState("");
   const [withdrawalTxHash, setWithdrawalTxHash] = useState("");
 
+  // Emergency Exit state — isolated from all existing dashboard modules.
+  const [emergencyEnabled, setEmergencyEnabled] = useState(false);
+  const [emergencyLoading, setEmergencyLoading] = useState(false);
+  const [emergencyBusy, setEmergencyBusy] = useState(false);
+  const [emergencyMessage, setEmergencyMessage] = useState("");
+  const [emergencyTxHash, setEmergencyTxHash] = useState("");
+  const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
+
   const loadDashboard = useCallback(async (walletAddress: string) => {
     if (!walletAddress) return;
 
@@ -1502,6 +1510,150 @@ export default function Dashboard() {
     const threshold = (item.amount * 70n) / 100n;
     return item.totalPaid < threshold;
   });
+
+  // Emergency return preview mirrors the deployed contract's 70% rule.
+  const emergencyReturn = emergencyEligiblePackages.reduce((sum, item) => {
+    const threshold = (item.amount * 70n) / 100n;
+    return sum + (threshold - item.totalPaid);
+  }, 0n);
+
+  const loadEmergencyConfig = useCallback(async () => {
+    if (!wallet) {
+      setEmergencyEnabled(false);
+      setEmergencyMessage("");
+      return;
+    }
+
+    try {
+      setEmergencyLoading(true);
+      setEmergencyMessage("");
+
+      // Read the live feature flag from the same deployed ORBI WORLD contract
+      // already used by the rest of this dashboard. No hardcoded enable/disable state.
+      const readContract = getOrbiWorldReadContract();
+      const featureConfig = await readContract.s_featureConfig();
+      const enabled = Boolean(
+        featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
+      );
+
+      setEmergencyEnabled(enabled);
+    } catch (err) {
+      console.error("Emergency Exit config load failed:", err);
+      setEmergencyEnabled(false);
+      setEmergencyMessage(
+        err instanceof Error
+          ? err.message
+          : "Unable to read Emergency Exit status from the blockchain."
+      );
+    } finally {
+      setEmergencyLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (activeNav === "Emergency Exit" && wallet) {
+      loadEmergencyConfig();
+    }
+  }, [activeNav, wallet, loadEmergencyConfig]);
+
+  const emergencyCapitalWithdraw = useCallback(async () => {
+    if (!wallet) {
+      setEmergencyMessage("Connect your wallet before using Emergency Exit.");
+      return;
+    }
+
+    if (user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)) {
+      setEmergencyMessage("Your account is already in Emergency Exit status.");
+      return;
+    }
+
+    if (!emergencyEnabled) {
+      setEmergencyMessage(
+        "Emergency Capital Withdrawal is currently disabled by the smart contract."
+      );
+      return;
+    }
+
+    if (emergencyEligiblePackages.length === 0 || emergencyReturn <= 0n) {
+      setEmergencyMessage(
+        "You are not currently eligible for Emergency Capital Withdrawal."
+      );
+      return;
+    }
+
+    try {
+      setEmergencyBusy(true);
+      setEmergencyMessage("");
+      setEmergencyTxHash("");
+
+      const ethereum = (window as Window & {
+        ethereum?: WalletProvider;
+      }).ethereum;
+
+      if (!ethereum) {
+        throw new Error("No compatible wallet detected.");
+      }
+
+      const browserProvider = new ethers.BrowserProvider(ethereum);
+
+      if (!(await isCorrectNetwork(browserProvider))) {
+        throw new Error(
+          `Wrong network. Please switch your wallet to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
+        );
+      }
+
+      const signer = await browserProvider.getSigner();
+      const signerAddress = await signer.getAddress();
+
+      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
+        throw new Error(
+          "Connected wallet changed. Please reconnect the correct wallet and try again."
+        );
+      }
+
+      const contract = getOrbiWorldWriteContract(signer);
+
+      // Preflight the exact on-chain operation before opening the wallet
+      // confirmation. This prevents avoidable signature prompts when the
+      // contract has become ineligible, paused, or otherwise unable to execute.
+      await contract.emergencyCapitalWithdraw.staticCall();
+
+      const tx = await contract.emergencyCapitalWithdraw();
+
+      setEmergencyTxHash(tx.hash);
+      setEmergencyMessage(
+        "Emergency Exit submitted. Waiting for blockchain confirmation..."
+      );
+
+      await tx.wait();
+
+      setEmergencyConfirmOpen(false);
+      setEmergencyMessage(
+        "Emergency Capital Withdrawal completed successfully. Refreshing on-chain data..."
+      );
+
+      // Refresh the same source-of-truth data used by My Packages/Dashboard.
+      await loadDashboard(wallet);
+      await loadEmergencyConfig();
+    } catch (err) {
+      console.error("Emergency Capital Withdrawal failed:", err);
+      setEmergencyMessage(
+        err instanceof Error
+          ? err.message
+          : "Emergency Capital Withdrawal failed. Please try again."
+      );
+    } finally {
+      setEmergencyBusy(false);
+    }
+  }, [
+    emergencyEnabled,
+    emergencyEligiblePackages.length,
+    emergencyReturn,
+    loadDashboard,
+    loadEmergencyConfig,
+    user.status,
+    wallet,
+  ]);
 
   const renderMain = () => {
     if (activeNav === "My Packages") {
@@ -3558,6 +3710,314 @@ export default function Dashboard() {
       );
     }
 
+    if (activeNav === "Emergency Exit") {
+      const emergencyStatus = emergencyLoading
+        ? "CHECKING"
+        : !emergencyEnabled
+          ? "DISABLED"
+          : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+            ? "COMPLETED"
+            : emergencyEligiblePackages.length > 0
+              ? "ELIGIBLE"
+              : "LOCKED";
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow orbi-emergency-eyebrow">
+                <span className="orbi-emergency-dot" />
+                EMERGENCY CAPITAL EXIT
+              </div>
+              <h1>Emergency Exit<span>.</span></h1>
+              <p>
+                Permanently close your active packages and withdraw the eligible
+                capital amount calculated by the ORBI WORLD smart contract.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadEmergencyConfig}
+              disabled={emergencyLoading || emergencyBusy || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {emergencyLoading ? "Checking..." : "Refresh"}
+            </button>
+          </section>
+
+          {emergencyMessage && (
+            <div
+              className={`orbi-alert ${
+                emergencyMessage.toLowerCase().includes("successfully")
+                  ? "orbi-alert-success"
+                  : ""
+              }`}
+            >
+              <Icon name="alert" size={18} />
+              <span>{emergencyMessage}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art orbi-emergency-art">
+                <Icon name="alert" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect the wallet that owns your ORBI WORLD account to check
+                  Emergency Exit eligibility.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-emergency-overview">
+                <div>
+                  <span>ACTIVE PACKAGES</span>
+                  <strong>{activePackages.length}</strong>
+                  <small>Packages that will be closed</small>
+                </div>
+                <div>
+                  <span>ELIGIBLE PACKAGES</span>
+                  <strong>{emergencyEligiblePackages.length}</strong>
+                  <small>Below the 70% threshold</small>
+                </div>
+                <div>
+                  <span>ESTIMATED RETURN</span>
+                  <strong>${formatUsdt(emergencyReturn)}</strong>
+                  <small>Calculated from current on-chain package data</small>
+                </div>
+                <div>
+                  <span>EXIT STATUS</span>
+                  <strong
+                    className={
+                      emergencyStatus === "ELIGIBLE"
+                        ? "orbi-emergency-status-value eligible"
+                        : "orbi-emergency-status-value"
+                    }
+                  >
+                    {emergencyStatus}
+                  </strong>
+                  <small>Live smart-contract feature flag + eligibility</small>
+                </div>
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card orbi-emergency-action-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">PERMANENT ACTION</span>
+                      <h2>Emergency Capital Withdrawal</h2>
+                      <p>
+                        This is separate from normal earnings withdrawal. The
+                        transaction is executed directly on-chain.
+                      </p>
+                    </div>
+                    <Icon name="alert" size={22} />
+                  </div>
+
+                  <div className="orbi-emergency-warning">
+                    <Icon name="alert" size={18} />
+                    <div>
+                      <strong>This action cannot be reversed.</strong>
+                      <span>
+                        All active packages are permanently closed and your
+                        account moves to EMERGENCY EXIT status.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="orbi-emergency-rules">
+                    <div>
+                      <span>01</span>
+                      <div>
+                        <b>All active packages close</b>
+                        <small>No package remains active after confirmation.</small>
+                      </div>
+                    </div>
+                    <div>
+                      <span>02</span>
+                      <div>
+                        <b>70% capital rule applies</b>
+                        <small>
+                          Only the amount below each package's 70% threshold is
+                          returned.
+                        </small>
+                      </div>
+                    </div>
+                    <div>
+                      <span>03</span>
+                      <div>
+                        <b>Return is calculated on-chain</b>
+                        <small>The smart contract is the final source of truth.</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    className="orbi-emergency-submit"
+                    onClick={() => setEmergencyConfirmOpen(true)}
+                    disabled={
+                      emergencyBusy ||
+                      emergencyLoading ||
+                      !emergencyEnabled ||
+                      user.status === BigInt(USER_STATUS.EMERGENCY_EXIT) ||
+                      emergencyEligiblePackages.length === 0
+                    }
+                  >
+                    <Icon name="alert" size={17} />
+                    {emergencyBusy
+                      ? "Processing Emergency Exit..."
+                      : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+                        ? "Emergency Exit Completed"
+                        : !emergencyEnabled
+                          ? "Emergency Exit Disabled"
+                          : emergencyEligiblePackages.length === 0
+                            ? "No Eligible Packages"
+                            : "Continue to Emergency Exit"}
+                  </button>
+
+                  {emergencyTxHash && (
+                    <a
+                      className="orbi-modal-tx"
+                      href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View Emergency Exit transaction on BscScan
+                      <Icon name="external" size={13} />
+                    </a>
+                  )}
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">EXIT PROCESS</span>
+                      <h2>What happens next?</h2>
+                      <p>The contract handles the complete exit atomically.</p>
+                    </div>
+                    <Icon name="activity" size={22} />
+                  </div>
+
+                  <div className="orbi-withdraw-lifecycle orbi-emergency-lifecycle">
+                    <div>
+                      <span>1</span>
+                      <div>
+                        <b>REVIEW</b>
+                        <small>Check eligible packages and estimated return.</small>
+                      </div>
+                    </div>
+                    <div>
+                      <span>2</span>
+                      <div>
+                        <b>CONFIRM</b>
+                        <small>Confirm the permanent transaction in your wallet.</small>
+                      </div>
+                    </div>
+                    <div>
+                      <span>3</span>
+                      <div>
+                        <b>ON-CHAIN EXECUTION</b>
+                        <small>Packages close and eligible USDT is transferred.</small>
+                      </div>
+                    </div>
+                    <div>
+                      <span>4</span>
+                      <div>
+                        <b>EMERGENCY EXIT</b>
+                        <small>Your account status becomes EMERGENCY EXIT.</small>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PACKAGE ELIGIBILITY</span>
+                    <h2>Emergency return breakdown</h2>
+                    <p>
+                      Current package values are read from the same blockchain
+                      data used by My Packages.
+                    </p>
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>ESTIMATED TOTAL</span>
+                    <strong>${formatUsdt(emergencyReturn)}</strong>
+                  </div>
+                </div>
+
+                {activePackages.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="package" size={24} />
+                    <span>No active packages.</span>
+                    <small>
+                      Emergency Exit is unavailable because there is no active
+                      package.
+                    </small>
+                  </div>
+                ) : (
+                  <div className="orbi-emergency-package-list">
+                    {activePackages.map((item) => {
+                      const threshold = (item.amount * 70n) / 100n;
+                      const eligible = item.totalPaid < threshold;
+                      const returnAmount = eligible ? threshold - item.totalPaid : 0n;
+
+                      return (
+                        <div
+                          className={`orbi-emergency-package ${
+                            eligible ? "eligible" : "locked"
+                          }`}
+                          key={item.packageId.toString()}
+                        >
+                          <div>
+                            <span>PACKAGE</span>
+                            <b>#{item.packageId.toString()}</b>
+                          </div>
+                          <div>
+                            <span>STAKED</span>
+                            <b>${formatUsdt(item.amount)}</b>
+                          </div>
+                          <div>
+                            <span>TOTAL PAID</span>
+                            <b>${formatUsdt(item.totalPaid)}</b>
+                          </div>
+                          <div>
+                            <span>70% THRESHOLD</span>
+                            <b>${formatUsdt(threshold)}</b>
+                          </div>
+                          <div>
+                            <span>EST. RETURN</span>
+                            <b>${formatUsdt(returnAmount)}</b>
+                          </div>
+                          <span
+                            className={`orbi-emergency-package-badge ${
+                              eligible ? "eligible" : "locked"
+                            }`}
+                          >
+                            {eligible ? "ELIGIBLE" : "NO RETURN"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
     if (activeNav !== "Dashboard") {
       return (
         <section className="orbi-empty-section">
@@ -5265,6 +5725,17 @@ export default function Dashboard() {
         }
 
         @media (max-width: 850px) {
+          .orbi-emergency-overview {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-emergency-package {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .orbi-emergency-package-badge {
+            justify-self: start;
+          }
           .orbi-sidebar {
             transform: translateX(-100%);
             transition: transform 220ms ease;
@@ -5351,6 +5822,291 @@ export default function Dashboard() {
 
         .orbi-stake-btn:disabled {
           opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .orbi-emergency-eyebrow {
+          color: #ff9b9b;
+        }
+
+        .orbi-emergency-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: var(--od-danger);
+          box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
+        }
+
+        .orbi-emergency-art {
+          color: #ffb0b0;
+          background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(115, 87, 255, 0.08));
+          border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .orbi-emergency-overview {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .orbi-emergency-overview > div {
+          min-height: 112px;
+          padding: 15px;
+          border: 1px solid var(--od-border);
+          border-radius: 14px;
+          background: linear-gradient(145deg, rgba(14, 21, 34, 0.92), rgba(8, 13, 21, 0.82));
+        }
+
+        .orbi-emergency-overview span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-emergency-overview strong {
+          display: block;
+          margin-top: 9px;
+          font-size: 22px;
+          letter-spacing: -0.03em;
+        }
+
+        .orbi-emergency-overview small {
+          display: block;
+          margin-top: 5px;
+          color: var(--od-muted);
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .orbi-emergency-status-value.eligible {
+          color: #fca5a5;
+        }
+
+        .orbi-emergency-action-card {
+          border-color: rgba(239, 68, 68, 0.2);
+          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(239, 68, 68, 0.06);
+        }
+
+        .orbi-emergency-warning {
+          display: flex;
+          align-items: flex-start;
+          gap: 11px;
+          padding: 13px;
+          border: 1px solid rgba(239, 68, 68, 0.22);
+          border-radius: 12px;
+          color: #fecaca;
+          background: rgba(239, 68, 68, 0.055);
+        }
+
+        .orbi-emergency-warning svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .orbi-emergency-warning strong,
+        .orbi-emergency-warning span {
+          display: block;
+        }
+
+        .orbi-emergency-warning strong {
+          font-size: 12px;
+        }
+
+        .orbi-emergency-warning span {
+          margin-top: 3px;
+          color: #d7a4a4;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .orbi-emergency-rules {
+          display: grid;
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .orbi-emergency-rules > div {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+          padding: 10px 11px;
+          border: 1px solid rgba(38, 55, 80, 0.65);
+          border-radius: 10px;
+          background: rgba(14, 21, 34, 0.45);
+        }
+
+        .orbi-emergency-rules > div > span {
+          width: 28px;
+          height: 28px;
+          flex: 0 0 auto;
+          display: grid;
+          place-items: center;
+          border-radius: 8px;
+          color: #ffb4b4;
+          border: 1px solid rgba(239, 68, 68, 0.18);
+          background: rgba(239, 68, 68, 0.07);
+          font-size: 8px;
+          font-weight: 900;
+        }
+
+        .orbi-emergency-rules b,
+        .orbi-emergency-rules small {
+          display: block;
+        }
+
+        .orbi-emergency-rules b {
+          color: #eaf0f7;
+          font-size: 11px;
+        }
+
+        .orbi-emergency-rules small {
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .orbi-emergency-submit {
+          width: 100%;
+          min-height: 50px;
+          margin-top: 16px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 1px solid rgba(239, 68, 68, 0.35);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(153, 27, 27, 0.95));
+          font-size: 13px;
+          font-weight: 900;
+          cursor: pointer;
+          box-shadow: 0 14px 32px rgba(127, 29, 29, 0.2);
+          transition: 180ms ease;
+        }
+
+        .orbi-emergency-submit:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 17px 38px rgba(127, 29, 29, 0.28);
+        }
+
+        .orbi-emergency-submit:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .orbi-emergency-lifecycle {
+          gap: 8px;
+        }
+
+        .orbi-emergency-package-list {
+          display: grid;
+          gap: 9px;
+        }
+
+        .orbi-emergency-package {
+          display: grid;
+          grid-template-columns: 0.8fr 1fr 1fr 1.15fr 1.15fr auto;
+          align-items: center;
+          gap: 10px;
+          padding: 13px;
+          border: 1px solid rgba(38, 55, 80, 0.75);
+          border-radius: 12px;
+          background: rgba(6, 10, 17, 0.55);
+        }
+
+        .orbi-emergency-package.eligible {
+          border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .orbi-emergency-package > div > span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 7px;
+          font-weight: 800;
+          letter-spacing: 0.11em;
+        }
+
+        .orbi-emergency-package b {
+          display: block;
+          margin-top: 4px;
+          font-size: 11px;
+        }
+
+        .orbi-emergency-package-badge {
+          justify-self: end;
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 7px !important;
+          font-weight: 900 !important;
+          letter-spacing: 0.1em !important;
+          white-space: nowrap;
+        }
+
+        .orbi-emergency-package-badge.eligible {
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.18);
+          background: rgba(239, 68, 68, 0.07);
+        }
+
+        .orbi-emergency-package-badge.locked {
+          color: #aebbd0;
+          border: 1px solid rgba(139, 155, 176, 0.13);
+          background: rgba(139, 155, 176, 0.06);
+        }
+
+        .orbi-emergency-confirm-box {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-top: 18px;
+          padding: 13px;
+          border: 1px solid rgba(239, 68, 68, 0.24);
+          border-radius: 12px;
+          color: #fecaca;
+          background: rgba(239, 68, 68, 0.06);
+        }
+
+        .orbi-emergency-confirm-box strong,
+        .orbi-emergency-confirm-box p {
+          display: block;
+        }
+
+        .orbi-emergency-confirm-box strong {
+          font-size: 12px;
+        }
+
+        .orbi-emergency-confirm-box p {
+          margin: 4px 0 0;
+          color: #d7a4a4;
+          font-size: 10px;
+          line-height: 1.5;
+        }
+
+        .orbi-modal-secondary {
+          width: 100%;
+          min-height: 45px;
+          margin-top: 9px;
+          border: 1px solid var(--od-border);
+          border-radius: 11px;
+          color: var(--od-muted);
+          background: rgba(255, 255, 255, 0.025);
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .orbi-modal-secondary:hover:not(:disabled) {
+          color: #fff;
+          border-color: var(--od-border-light);
+        }
+
+        .orbi-modal-secondary:disabled {
+          opacity: 0.45;
           cursor: not-allowed;
         }
 
@@ -5932,6 +6688,113 @@ export default function Dashboard() {
 
             <p className="orbi-modal-note">
               You will be asked to confirm each blockchain transaction in your connected wallet.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {emergencyConfirmOpen && (
+        <div
+          className="orbi-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !emergencyBusy) {
+              setEmergencyConfirmOpen(false);
+            }
+          }}
+        >
+          <div
+            className="orbi-modal orbi-emergency-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orbi-emergency-modal-title"
+          >
+            <div className="orbi-modal-head">
+              <div>
+                <span className="orbi-section-kicker orbi-emergency-eyebrow-text">
+                  PERMANENT ACTION
+                </span>
+                <h2 id="orbi-emergency-modal-title">Confirm Emergency Exit</h2>
+                <p>
+                  You are about to permanently close all active packages. The
+                  smart contract will transfer the eligible emergency amount
+                  to your wallet.
+                </p>
+              </div>
+              <button
+                className="orbi-modal-close"
+                onClick={() => setEmergencyConfirmOpen(false)}
+                disabled={emergencyBusy}
+                aria-label="Close Emergency Exit confirmation"
+              >
+                <Icon name="close" size={20} />
+              </button>
+            </div>
+
+            <div className="orbi-modal-balance">
+              <div>
+                <span>ELIGIBLE PACKAGES</span>
+                <strong>{emergencyEligiblePackages.length}</strong>
+              </div>
+              <div>
+                <span>ESTIMATED RETURN</span>
+                <strong>${formatUsdt(emergencyReturn)}</strong>
+              </div>
+            </div>
+
+            <div className="orbi-emergency-confirm-box">
+              <Icon name="alert" size={20} />
+              <div>
+                <strong>Important</strong>
+                <p>
+                  This action is irreversible. All active packages are closed,
+                  your account enters EMERGENCY EXIT status, and the contract
+                  determines the final return amount.
+                </p>
+              </div>
+            </div>
+
+            {emergencyMessage && (
+              <div className="orbi-modal-message">
+                <Icon name="alert" size={16} />
+                <span>{emergencyMessage}</span>
+              </div>
+            )}
+
+            {emergencyTxHash && (
+              <a
+                className="orbi-modal-tx"
+                href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View transaction on BscScan
+                <Icon name="external" size={13} />
+              </a>
+            )}
+
+            <button
+              className="orbi-emergency-submit orbi-emergency-confirm-submit"
+              onClick={emergencyCapitalWithdraw}
+              disabled={emergencyBusy}
+            >
+              <Icon name="alert" size={17} />
+              {emergencyBusy
+                ? "Waiting for Confirmation..."
+                : "Confirm & Execute Emergency Exit"}
+            </button>
+
+            <button
+              className="orbi-modal-secondary"
+              onClick={() => setEmergencyConfirmOpen(false)}
+              disabled={emergencyBusy}
+            >
+              Cancel
+            </button>
+
+            <p className="orbi-modal-note">
+              Your wallet will ask you to approve the on-chain Emergency Capital
+              Withdrawal transaction.
             </p>
           </div>
         </div>
