@@ -359,6 +359,16 @@ function Icon({
         <path d="M5 21h14" />
       </>
     ),
+    network: (
+      <>
+        <path d="M12 3v4" />
+        <path d="M6.5 7.5 9 10" />
+        <path d="M17.5 7.5 15 10" />
+        <path d="M5 14h4" />
+        <path d="M15 14h4" />
+        <circle cx="12" cy="13" r="3" />
+      </>
+    ),
     alert: (
       <>
         <path d="m12 3 9 17H3L12 3Z" />
@@ -500,6 +510,18 @@ export default function Dashboard() {
   const [emergencyMessage, setEmergencyMessage] = useState("");
   const [emergencyTxHash, setEmergencyTxHash] = useState("");
   const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
+
+  // Settings state — isolated from all existing dashboard modules.
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsCopied, setSettingsCopied] = useState(false);
+  const [contractPaused, setContractPaused] = useState(false);
+  const [settingsFeatures, setSettingsFeatures] = useState({
+    registrationEnabled: false,
+    stakingEnabled: false,
+    withdrawalEnabled: false,
+    capitalWithdrawalEnabled: false,
+  });
 
   const loadDashboard = useCallback(async (walletAddress: string) => {
     if (!walletAddress) return;
@@ -1654,6 +1676,92 @@ export default function Dashboard() {
     user.status,
     wallet,
   ]);
+
+  const loadSettings = useCallback(async () => {
+    if (!wallet) {
+      setSettingsLoading(false);
+      setSettingsError("");
+      setContractPaused(false);
+      setSettingsFeatures({
+        registrationEnabled: false,
+        stakingEnabled: false,
+        withdrawalEnabled: false,
+        capitalWithdrawalEnabled: false,
+      });
+      return;
+    }
+
+    try {
+      setSettingsLoading(true);
+      setSettingsError("");
+
+      const readContract = getOrbiWorldReadContract();
+      const [paused, featureConfig] = await Promise.all([
+        readContract.paused(),
+        readContract.s_featureConfig(),
+      ]);
+
+      setContractPaused(Boolean(paused));
+      setSettingsFeatures({
+        registrationEnabled: Boolean(
+          featureConfig?.registrationEnabled ?? featureConfig?.[0]
+        ),
+        stakingEnabled: Boolean(
+          featureConfig?.stakingEnabled ?? featureConfig?.[1]
+        ),
+        withdrawalEnabled: Boolean(
+          featureConfig?.withdrawalEnabled ?? featureConfig?.[2]
+        ),
+        capitalWithdrawalEnabled: Boolean(
+          featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
+        ),
+      });
+    } catch (err) {
+      console.error("Settings load failed:", err);
+      setSettingsError(
+        err instanceof Error
+          ? err.message
+          : "Unable to read account settings from the blockchain."
+      );
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (activeNav === "Settings" && wallet) {
+      loadSettings();
+    }
+  }, [activeNav, wallet, loadSettings]);
+
+  const copySettingsWallet = useCallback(async () => {
+    if (!wallet) return;
+
+    try {
+      await navigator.clipboard.writeText(wallet);
+      setSettingsCopied(true);
+      window.setTimeout(() => setSettingsCopied(false), 1800);
+    } catch {
+      setSettingsError("Unable to copy wallet address.");
+    }
+  }, [wallet]);
+
+  const disconnectWallet = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("orbi.dashboard.wallet");
+    }
+
+    setWallet("");
+    setProvider(null);
+    setDashboard(EMPTY_DASHBOARD);
+    setPackages([]);
+    setUsdtBalance(0n);
+    setNativeBalance(0n);
+    setSettingsError("");
+    setSettingsCopied(false);
+    setActiveNav("Dashboard");
+    setMobileOpen(false);
+  }, []);
 
   const renderMain = () => {
     if (activeNav === "My Packages") {
@@ -4011,6 +4119,246 @@ export default function Dashboard() {
                     })}
                   </div>
                 )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Settings") {
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ACCOUNT SETTINGS
+              </div>
+              <h1>Settings<span>.</span></h1>
+              <p>
+                Manage your wallet connection and inspect the live account,
+                network, and ORBI WORLD contract status.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadSettings}
+              disabled={settingsLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {settingsLoading ? "Checking..." : "Refresh"}
+            </button>
+          </section>
+
+          {settingsError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{settingsError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="settings" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect your ORBI WORLD wallet to view account and network
+                  settings. Settings are tied to the connected wallet.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-stat-grid orbi-settings-overview">
+                <StatCard
+                  icon="wallet"
+                  label="CONNECTED WALLET"
+                  value={shortAddress(wallet)}
+                  meta="Current wallet session"
+                />
+                <StatCard
+                  icon="dashboard"
+                  label="USER ID"
+                  value={`#${formatInteger(user.id)}`}
+                  meta="On-chain account identifier"
+                />
+                <StatCard
+                  icon="activity"
+                  label="ACCOUNT STATUS"
+                  value={statusLabel(user.status)}
+                  meta="Read from ORBI WORLD"
+                />
+                <StatCard
+                  icon="network"
+                  label="NETWORK"
+                  value="BSC TESTNET"
+                  meta={`Chain ID ${BSC_TESTNET_CHAIN_ID}`}
+                />
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card orbi-settings-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">ACCOUNT</span>
+                      <h2>Wallet & account details</h2>
+                      <p>Identity information sourced from the connected wallet and smart contract.</p>
+                    </div>
+                    <Icon name="wallet" size={22} />
+                  </div>
+
+                  <div className="orbi-settings-list">
+                    <div className="orbi-settings-row orbi-settings-address-row">
+                      <div>
+                        <span>WALLET ADDRESS</span>
+                        <strong>{shortAddress(wallet)}</strong>
+                        <small>{wallet}</small>
+                      </div>
+                      <div className="orbi-settings-actions">
+                        <button className="orbi-copy-btn" onClick={copySettingsWallet}>
+                          <Icon name="copy" size={14} />
+                          {settingsCopied ? "Copied" : "Copy"}
+                        </button>
+                        <a
+                          className="orbi-copy-btn"
+                          href={`${BLOCK_EXPLORER}/address/${wallet}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Icon name="external" size={14} />
+                          View
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="orbi-settings-row">
+                      <div><span>USER ID</span><strong>#{formatInteger(user.id)}</strong></div>
+                      <div className="orbi-settings-value-right"><span>STATUS</span><strong>{statusLabel(user.status)}</strong></div>
+                    </div>
+                    <div className="orbi-settings-row">
+                      <div><span>SPONSOR ID</span><strong>{user.sponsorId > 0n ? `#${formatInteger(user.sponsorId)}` : "—"}</strong></div>
+                      <div className="orbi-settings-value-right"><span>DIRECT REFERRALS</span><strong>{formatInteger(user.directCount)}</strong></div>
+                    </div>
+                    <div className="orbi-settings-row">
+                      <div><span>ACTIVE DIRECTS</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
+                      <div className="orbi-settings-value-right"><span>TOTAL WITHDRAWN</span><strong>${formatUsdt(user.totalWithdrawn)}</strong></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="orbi-card orbi-settings-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">NETWORK & CONTRACT</span>
+                      <h2>Live protocol status</h2>
+                      <p>These values are read directly from the deployed ORBI WORLD contract.</p>
+                    </div>
+                    <Icon name="activity" size={22} />
+                  </div>
+
+                  <div className="orbi-settings-list">
+                    <div className="orbi-settings-row">
+                      <div><span>NETWORK</span><strong>BNB Smart Chain Testnet</strong></div>
+                      <div className="orbi-settings-value-right"><span>CHAIN ID</span><strong>{BSC_TESTNET_CHAIN_ID}</strong></div>
+                    </div>
+                    <div className="orbi-settings-row orbi-settings-address-row">
+                      <div><span>ORBI WORLD CONTRACT</span><strong>{shortAddress(ORBI_WORLD_SPENDER_ADDRESS)}</strong><small>{ORBI_WORLD_SPENDER_ADDRESS}</small></div>
+                      <a
+                        className="orbi-copy-btn"
+                        href={`${BLOCK_EXPLORER}/address/${ORBI_WORLD_SPENDER_ADDRESS}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Icon name="external" size={14} />
+                        View
+                      </a>
+                    </div>
+                    <div className="orbi-settings-row">
+                      <div><span>CONTRACT STATUS</span><strong className={contractPaused ? "orbi-settings-danger" : "orbi-settings-success"}>{contractPaused ? "PAUSED" : "ACTIVE"}</strong></div>
+                      <div className="orbi-settings-value-right"><span>CONFIG SOURCE</span><strong>ON-CHAIN</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-settings-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PROTOCOL FEATURES</span>
+                    <h2>Smart-contract feature status</h2>
+                    <p>Feature switches below reflect the current live contract configuration.</p>
+                  </div>
+                  <Icon name="settings" size={22} />
+                </div>
+
+                {settingsLoading ? (
+                  <div className="orbi-settings-loading">
+                    <Icon name="refresh" size={18} />
+                    Reading live contract settings...
+                  </div>
+                ) : (
+                  <div className="orbi-settings-feature-grid">
+                    {[
+                      ["Registration", settingsFeatures.registrationEnabled],
+                      ["Staking", settingsFeatures.stakingEnabled],
+                      ["Withdrawals", settingsFeatures.withdrawalEnabled],
+                      ["Emergency Exit", settingsFeatures.capitalWithdrawalEnabled],
+                    ].map(([label, enabled]) => (
+                      <div className="orbi-settings-feature" key={String(label)}>
+                        <span className={`orbi-settings-feature-dot ${enabled ? "enabled" : "disabled"}`} />
+                        <div>
+                          <strong>{String(label)}</strong>
+                          <small>{enabled ? "Enabled on-chain" : "Disabled on-chain"}</small>
+                        </div>
+                        <b className={enabled ? "enabled" : "disabled"}>{enabled ? "ON" : "OFF"}</b>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card orbi-settings-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">BALANCES</span>
+                      <h2>Wallet balances</h2>
+                      <p>Live balances for the currently connected wallet.</p>
+                    </div>
+                    <Icon name="money" size={22} />
+                  </div>
+                  <div className="orbi-balance-grid">
+                    <div><span>MOCUSDT</span><strong>${formatUsdt(usdtBalance)}</strong></div>
+                    <div><span>BNB</span><strong>{Number(ethers.formatEther(nativeBalance)).toFixed(4)} BNB</strong></div>
+                  </div>
+                </div>
+
+                <div className="orbi-card orbi-settings-card orbi-settings-session-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">WALLET SESSION</span>
+                      <h2>Connection controls</h2>
+                      <p>Disconnecting only clears this dashboard's saved wallet session.</p>
+                    </div>
+                    <Icon name="wallet" size={22} />
+                  </div>
+                  <button className="orbi-settings-disconnect" onClick={disconnectWallet}>
+                    <Icon name="close" size={16} />
+                    Disconnect Wallet
+                  </button>
+                  <small className="orbi-settings-session-note">
+                    Your wallet itself is never deleted or modified by this action.
+                  </small>
+                </div>
               </section>
             </>
           )}
@@ -6398,6 +6746,195 @@ export default function Dashboard() {
           line-height: 1.5;
         }
 
+        .orbi-settings-card {
+          min-height: 100%;
+        }
+
+        .orbi-settings-overview .orbi-stat {
+          min-height: 132px;
+        }
+
+        .orbi-settings-list {
+          display: flex;
+          flex-direction: column;
+          border-top: 1px solid rgba(38, 55, 80, 0.45);
+        }
+
+        .orbi-settings-row {
+          min-height: 72px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 13px 0;
+          border-bottom: 1px solid rgba(38, 55, 80, 0.42);
+        }
+
+        .orbi-settings-row:last-child {
+          border-bottom: 0;
+        }
+
+        .orbi-settings-row > div:first-child {
+          min-width: 0;
+        }
+
+        .orbi-settings-row span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+        }
+
+        .orbi-settings-row strong {
+          display: block;
+          margin-top: 5px;
+          font-size: 13px;
+          font-weight: 750;
+          overflow-wrap: anywhere;
+        }
+
+        .orbi-settings-row small {
+          display: block;
+          margin-top: 4px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          overflow-wrap: anywhere;
+        }
+
+        .orbi-settings-value-right {
+          flex: 0 0 auto;
+          min-width: 125px;
+          text-align: right;
+        }
+
+        .orbi-settings-address-row {
+          align-items: center;
+        }
+
+        .orbi-settings-actions {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          flex: 0 0 auto;
+        }
+
+        .orbi-settings-actions .orbi-copy-btn,
+        .orbi-settings-address-row > .orbi-copy-btn {
+          min-height: 34px;
+          padding: 0 10px;
+          font-size: 10px;
+        }
+
+        .orbi-settings-success {
+          color: #86efac !important;
+        }
+
+        .orbi-settings-danger {
+          color: #fca5a5 !important;
+        }
+
+        .orbi-settings-feature-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .orbi-settings-feature {
+          min-height: 72px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 13px;
+          border: 1px solid var(--od-border);
+          border-radius: 12px;
+          background: rgba(8, 13, 21, 0.55);
+        }
+
+        .orbi-settings-feature-dot {
+          width: 8px;
+          height: 8px;
+          flex: 0 0 8px;
+          border-radius: 50%;
+        }
+
+        .orbi-settings-feature-dot.enabled {
+          background: var(--od-success);
+          box-shadow: 0 0 11px rgba(34, 197, 94, 0.6);
+        }
+
+        .orbi-settings-feature-dot.disabled {
+          background: #64748b;
+        }
+
+        .orbi-settings-feature > div {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .orbi-settings-feature strong {
+          display: block;
+          font-size: 12px;
+        }
+
+        .orbi-settings-feature small {
+          display: block;
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+        }
+
+        .orbi-settings-feature > b {
+          font-size: 9px;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-settings-feature > b.enabled {
+          color: #86efac;
+        }
+
+        .orbi-settings-feature > b.disabled {
+          color: var(--od-muted-2);
+        }
+
+        .orbi-settings-loading {
+          min-height: 76px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          color: var(--od-muted);
+          font-size: 12px;
+        }
+
+        .orbi-settings-disconnect {
+          width: 100%;
+          min-height: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 1px solid rgba(239, 68, 68, 0.28);
+          border-radius: 11px;
+          background: rgba(239, 68, 68, 0.055);
+          color: #fca5a5;
+          font-weight: 750;
+          transition: 180ms ease;
+        }
+
+        .orbi-settings-disconnect:hover {
+          border-color: rgba(239, 68, 68, 0.45);
+          background: rgba(239, 68, 68, 0.09);
+          color: #fff;
+        }
+
+        .orbi-settings-session-note {
+          display: block;
+          margin-top: 9px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          line-height: 1.5;
+        }
+
         @media (max-width: 640px) {
           .orbi-package-overview-grid,
           .orbi-package-grid-page,
@@ -6470,6 +7007,34 @@ export default function Dashboard() {
 
           .orbi-referral-row {
             flex-direction: column;
+          }
+
+          .orbi-settings-feature-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-settings-row {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .orbi-settings-value-right {
+            min-width: 0;
+            text-align: left;
+          }
+
+          .orbi-settings-address-row {
+            flex-direction: column;
+          }
+
+          .orbi-settings-actions {
+            width: 100%;
+          }
+
+          .orbi-settings-actions .orbi-copy-btn,
+          .orbi-settings-address-row > .orbi-copy-btn {
+            flex: 1;
+            width: 100%;
           }
 
           .orbi-copy-btn {
