@@ -478,6 +478,9 @@ export default function Dashboard() {
   const [teamError, setTeamError] = useState("");
   const [teamLoadedFor, setTeamLoadedFor] = useState("");
   const [teamIndirectCount, setTeamIndirectCount] = useState<bigint>(0n);
+  const [referralLegBusiness, setReferralLegBusiness] = useState<Record<string, bigint>>({});
+  const [referralBusinessLoading, setReferralBusinessLoading] = useState(false);
+  const [referralBusinessError, setReferralBusinessError] = useState("");
   const [levelIncomeBps, setLevelIncomeBps] = useState<bigint[]>(Array(10).fill(0n));
   const [levelIncomeEnabled, setLevelIncomeEnabled] = useState(false);
   const [levelIncomeHistory, setLevelIncomeHistory] = useState<LevelIncomeEntry[]>([]);
@@ -954,6 +957,58 @@ export default function Dashboard() {
       }
     }
   }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
+  // Referral Center reuses the existing direct-team loader, then reads the
+  // contract's exact direct-leg business values without changing My Team.
+  useEffect(() => {
+    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n) {
+      const normalizedWallet = wallet.toLowerCase();
+      if (teamLoadedFor !== normalizedWallet) {
+        loadMyTeam(dashboard.user.id, wallet);
+      }
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
+  const loadReferralBusiness = useCallback(async (userId: bigint, members: TeamMember[]) => {
+    if (userId === 0n || members.length === 0) {
+      setReferralLegBusiness({});
+      setReferralBusinessError("");
+      return;
+    }
+
+    try {
+      setReferralBusinessLoading(true);
+      setReferralBusinessError("");
+      const contract = getOrbiWorldReadContract();
+      const entries = await Promise.all(
+        members.map(async (member) => {
+          try {
+            const value = await contract.getDirectLegBusiness(userId, member.id);
+            return [member.id.toString(), toBigInt(value)] as const;
+          } catch {
+            return [member.id.toString(), 0n] as const;
+          }
+        })
+      );
+      setReferralLegBusiness(Object.fromEntries(entries));
+    } catch (err) {
+      console.error("Referral business load failed:", err);
+      setReferralLegBusiness({});
+      setReferralBusinessError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load direct referral business from the blockchain."
+      );
+    } finally {
+      setReferralBusinessLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n && !teamLoading) {
+      loadReferralBusiness(dashboard.user.id, teamMembers);
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamMembers, teamLoading, loadReferralBusiness]);
 
   const loadLevelIncome = useCallback(async (userId: bigint) => {
     if (userId === 0n) {
@@ -4358,6 +4413,167 @@ export default function Dashboard() {
                   <small className="orbi-settings-session-note">
                     Your wallet itself is never deleted or modified by this action.
                   </small>
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Referral") {
+      const activeDirects = teamMembers.filter(
+        (member) => member.status === BigInt(USER_STATUS.ACTIVE)
+      ).length;
+      const inactiveDirects = Math.max(0, teamMembers.length - activeDirects);
+      const directBusiness = teamMembers.reduce(
+        (sum, member) => sum + (referralLegBusiness[member.id.toString()] ?? 0n),
+        0n
+      );
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                NETWORK GROWTH
+              </div>
+              <h1>Referral Center<span>.</span></h1>
+              <p>
+                Grow your ORBI WORLD network with your wallet-linked referral
+                link and track your direct referrals from the blockchain.
+              </p>
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={() => wallet && dashboard.user.id > 0n && loadMyTeam(dashboard.user.id, wallet)}
+              disabled={teamLoading || !wallet || dashboard.user.id === 0n}
+            >
+              <Icon name="refresh" size={17} />
+              {teamLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {teamError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{teamError}</span>
+            </div>
+          )}
+
+          {referralBusinessError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{referralBusinessError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+                <p>
+                  Connect the wallet that owns your ORBI WORLD account to generate
+                  your referral link and load your direct referrals.
+                </p>
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-card orbi-referral-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">YOUR INVITE LINK</span>
+                    <h2>Share your referral link</h2>
+                    <p>Anyone registering through this link is assigned to your wallet as sponsor.</p>
+                  </div>
+                  <Icon name="link" size={22} />
+                </div>
+                <div className="orbi-referral-row">
+                  <div className="orbi-referral-input">
+                    <span>{referralLink || "Generating referral link..."}</span>
+                  </div>
+                  <button className="orbi-copy-btn" onClick={copyReferral} disabled={!referralLink}>
+                    <Icon name="copy" size={17} />
+                    {copied ? "Copied" : "Copy Link"}
+                  </button>
+                </div>
+              </section>
+
+              <section className="orbi-package-overview-grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                <div><span>TOTAL DIRECTS</span><strong>{formatInteger(user.directCount)}</strong><small>Registered directly under you</small></div>
+                <div><span>ACTIVE DIRECTS</span><strong>{formatInteger(user.activeDirectCount)}</strong><small>Currently active accounts</small></div>
+                <div><span>DIRECT BUSINESS</span><strong>${referralBusinessLoading ? "…" : formatUsdt(directBusiness)}</strong><small>On-chain direct-leg business</small></div>
+                <div><span>SPONSOR ID</span><strong>{user.sponsorId === 0n ? "—" : `#${user.sponsorId.toString()}`}</strong><small>Your upstream sponsor</small></div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">DIRECT NETWORK</span>
+                    <h2>Your direct referrals</h2>
+                    <p>Live member records are read directly from the ORBI WORLD smart contract.</p>
+                  </div>
+                  <div className="orbi-package-summary"><span>{teamMembers.length} loaded</span><strong>{activeDirects} active</strong></div>
+                </div>
+
+                {teamLoading && teamMembers.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="refresh" size={24} /><span>Loading direct referrals from blockchain...</span></div>
+                ) : teamMembers.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="team" size={24} /><span>No direct referrals yet.</span><small>Share your referral link above. Registered members will appear here automatically.</small></div>
+                ) : (
+                  <div className="orbi-withdraw-history-wrap">
+                    <table className="orbi-withdraw-table">
+                      <thead><tr><th>USER ID</th><th>WALLET</th><th>STATUS</th><th>DIRECTS</th><th>ACTIVE DIRECTS</th><th>DIRECT BUSINESS</th><th>RANK</th></tr></thead>
+                      <tbody>
+                        {teamMembers.map((member) => {
+                          const memberActive = member.status === BigInt(USER_STATUS.ACTIVE);
+                          const memberBusiness = referralLegBusiness[member.id.toString()];
+                          return (
+                            <tr key={member.id.toString()}>
+                              <td>#{member.id.toString()}</td>
+                              <td>{shortAddress(member.wallet)}</td>
+                              <td><span className={`orbi-withdraw-status ${memberActive ? "approved" : "rejected"}`}>{statusLabel(member.status)}</span></td>
+                              <td>{formatInteger(member.directCount)}</td>
+                              <td>{formatInteger(member.activeDirectCount)}</td>
+                              <td>{referralBusinessLoading && memberBusiness === undefined ? "Loading..." : `$${formatUsdt(memberBusiness ?? 0n)}`}</td>
+                              <td>RANK {member.rank.toString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card">
+                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">NETWORK SNAPSHOT</span><h2>Direct activity</h2></div><Icon name="team" size={22} /></div>
+                  <div className="orbi-network-grid">
+                    <div><span>REGISTERED</span><strong>{formatInteger(user.directCount)}</strong></div>
+                    <div><span>ACTIVE</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
+                    <div><span>INACTIVE</span><strong>{inactiveDirects}</strong></div>
+                    <div><span>TEAM BUSINESS</span><strong>${formatUsdt(user.lifetimeBusiness)}</strong></div>
+                  </div>
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">HOW IT WORKS</span><h2>Build your network</h2></div><Icon name="link" size={22} /></div>
+                  <div className="orbi-withdraw-lifecycle">
+                    <div><span>1</span><div><b>SHARE</b><small>Copy your personal referral link and share it.</small></div></div>
+                    <div><span>2</span><div><b>REGISTER</b><small>Your invitee registers with your wallet as sponsor.</small></div></div>
+                    <div><span>3</span><div><b>ACTIVATE</b><small>Once active, the member contributes to your network metrics.</small></div></div>
+                  </div>
                 </div>
               </section>
             </>
