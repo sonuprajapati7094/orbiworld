@@ -6,7 +6,7 @@ import { ethers } from "ethers";
    ================================================================ */
 
 export const ORBI_WORLD_ADDRESS =
-  "0x3F2CaA8Ac8A922bD750ae91B0139a6c897C79c82";
+  "0x85cd6097462E03726A6B030d30c4396c7A234dd6";
 
 export const MOCUSDT_ADDRESS =
   "0x9CBe843a4c02916da422aA2dD645f55AEb9d4c91";
