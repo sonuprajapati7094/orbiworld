@@ -10,6 +10,7 @@ import {
   getMocusdtWriteContract,
   getOrbiWorldReadContract,
   getOrbiWorldWriteContract,
+  ORBI_WORLD_SPENDER_ADDRESS,
   isCorrectNetwork,
   parseUSDT,
   shortAddress,
@@ -17,8 +18,6 @@ import {
   PACKAGE_STATUS,
 } from "../../lib/contract";
 
-// ERC20 spender for MOCUSDT approvals. This must match the deployed ORBI WORLD contract.
-const ORBI_WORLD_SPENDER_ADDRESS = "0x85cd6097462E03726A6B030d30c4396c7A234dd6";
 
 // Minimal ABI kept local so the Level Income module can read its own
 // configuration/history without changing the existing contract helper.
