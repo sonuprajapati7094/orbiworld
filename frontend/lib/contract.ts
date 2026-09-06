@@ -6,14 +6,14 @@ import { ethers } from "ethers";
    ================================================================ */
 
 export const ORBI_WORLD_ADDRESS =
-  "0xa03f714ca52f5e9883a0aea2933c88e3be4fe65f";
+  "0xAb61170d2D387EcefbF7e6041F7e1817d6FEb836";
 
 // ERC20 spender for MOCUSDT approvals. Always use the same canonical
 // deployed ORBI WORLD address; do not duplicate this address in page files.
 export const ORBI_WORLD_SPENDER_ADDRESS = ORBI_WORLD_ADDRESS;
 
 export const MOCUSDT_ADDRESS =
-  "0x9CBe843a4c02916da422aA2dD645f55AEb9d4c91";
+  "0xDDBb58c032959a07D3be447eEd3643f7782b0581";
 
 export const BSC_TESTNET_CHAIN_ID = 97;
 
