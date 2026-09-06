@@ -6,7 +6,11 @@ import { ethers } from "ethers";
    ================================================================ */
 
 export const ORBI_WORLD_ADDRESS =
-  "0x85cd6097462E03726A6B030d30c4396c7A234dd6";
+  "0xA03f714cA52F5e9883a0AEa2933c88e3BE4Fe65F";
+
+// ERC20 spender for MOCUSDT approvals. Always use the same canonical
+// deployed ORBI WORLD address; do not duplicate this address in page files.
+export const ORBI_WORLD_SPENDER_ADDRESS = ORBI_WORLD_ADDRESS;
 
 export const MOCUSDT_ADDRESS =
   "0x9CBe843a4c02916da422aA2dD645f55AEb9d4c91";
@@ -600,6 +604,21 @@ export const ROYALTY_LEVEL = {
   ONE_PERCENT: 1,
   TWO_PERCENT: 2,
 } as const;
+
+/* ================================================================
+   DASHBOARD / BUSINESS HELPERS
+   ================================================================ */
+
+export async function getUserBusinessStats(userId: bigint | number | string) {
+  const contract = getOrbiWorldReadContract();
+  return contract.getBusinessStats(userId);
+}
+
+export async function getUserDashboardData(userId: bigint | number | string) {
+  const contract = getOrbiWorldReadContract();
+  return contract.getDashboardData(userId);
+}
+
 
 /* ================================================================
    NETWORK HELPER
