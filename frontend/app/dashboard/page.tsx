@@ -4399,10 +4399,10 @@ export default function Dashboard() {
           <div>
             <div className="orbi-eyebrow">
               <span className="orbi-live-dot" />
-              DECENTRALISED DASHBOARD
+              DECENTRALIZED DASHBOARD
             </div>
             <h1>
-              Welcome to Orbiworld<span>.</span>
+              Welcome To ORBI WORLD<span>.</span>
             </h1>
             <p>
               Your ORBI WORLD ecosystem overview, powered directly by the
@@ -7061,7 +7061,7 @@ export default function Dashboard() {
         <div className="orbi-brand">
           <div className="orbi-brand-logo-wrap">
             <img
-              src="/orbi-world-logo.png"
+              src="/orbi-logo.png"
               alt="ORBI WORLD"
               className="orbi-brand-logo"
             />
