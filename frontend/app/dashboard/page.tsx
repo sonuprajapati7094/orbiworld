@@ -4815,25 +4815,28 @@ export default function Dashboard() {
     <main className="orbi-dashboard">
       <style jsx global>{`
         .orbi-dashboard {
-          --od-bg: #030508;
-          --od-surface: #0a0f18;
-          --od-surface-2: #0e1522;
-          --od-border: #1c2a3d;
-          --od-border-light: #263750;
+          --od-bg: #03050a;
+          --od-surface: #080d16;
+          --od-surface-2: #0d1522;
+          --od-border: rgba(63, 115, 176, 0.28);
+          --od-border-light: rgba(72, 145, 225, 0.42);
           --od-primary: #168cff;
+          --od-primary-soft: #54b4ff;
           --od-purple: #7357ff;
           --od-orange: #ff9d32;
-          --od-text: #f8fafc;
-          --od-muted: #8b9bb0;
-          --od-muted-2: #5f7087;
+          --od-gold: #ffd166;
+          --od-text: #f8fbff;
+          --od-muted: #91a5bd;
+          --od-muted-2: #637991;
           --od-success: #22c55e;
           --od-danger: #ef4444;
           min-height: 100vh;
           display: flex;
           color: var(--od-text);
           background:
-            radial-gradient(circle at 78% 8%, rgba(115, 87, 255, 0.09), transparent 25%),
-            radial-gradient(circle at 28% 15%, rgba(22, 140, 255, 0.08), transparent 28%),
+            radial-gradient(circle at 82% 4%, rgba(115, 87, 255, 0.13), transparent 27%),
+            radial-gradient(circle at 24% 12%, rgba(22, 140, 255, 0.11), transparent 30%),
+            radial-gradient(circle at 62% 88%, rgba(255, 157, 50, 0.045), transparent 24%),
             var(--od-bg);
           font-family: Arial, Helvetica, sans-serif;
         }
@@ -4846,8 +4849,9 @@ export default function Dashboard() {
           padding: 22px 14px 18px;
           display: flex;
           flex-direction: column;
-          background: rgba(7, 11, 18, 0.94);
+          background: linear-gradient(180deg, rgba(5, 9, 16, 0.98), rgba(3, 7, 13, 0.98));
           border-right: 1px solid var(--od-border);
+          box-shadow: 14px 0 45px rgba(0, 0, 0, 0.18);
           backdrop-filter: blur(20px);
           -webkit-backdrop-filter: blur(20px);
         }
@@ -4860,7 +4864,8 @@ export default function Dashboard() {
 
         .orbi-brand-logo {
           display: block;
-          width: 115px;
+          width: 128px;
+          max-width: 100%;
           height: auto;
           object-fit: contain;
         }
@@ -4926,15 +4931,15 @@ export default function Dashboard() {
 
         .orbi-nav-button:hover {
           color: #fff;
-          background: rgba(22, 140, 255, 0.06);
-          border-color: rgba(38, 55, 80, 0.8);
+          background: linear-gradient(90deg, rgba(22, 140, 255, 0.08), rgba(115, 87, 255, 0.035));
+          border-color: rgba(22, 140, 255, 0.16);
         }
 
         .orbi-nav-button.active {
           color: #fff;
-          background: linear-gradient(90deg, rgba(22, 140, 255, 0.13), rgba(115, 87, 255, 0.08));
-          border-color: rgba(22, 140, 255, 0.2);
-          box-shadow: inset 2px 0 0 var(--od-primary);
+          background: linear-gradient(90deg, rgba(22, 140, 255, 0.17), rgba(115, 87, 255, 0.10));
+          border-color: rgba(22, 140, 255, 0.34);
+          box-shadow: inset 3px 0 0 var(--od-primary), 0 8px 24px rgba(22, 140, 255, 0.06);
         }
 
         .orbi-nav-button.danger {
@@ -5062,8 +5067,8 @@ export default function Dashboard() {
 
         .orbi-primary-btn {
           border-color: rgba(22, 140, 255, 0.5);
-          background: linear-gradient(135deg, rgba(22, 140, 255, 0.95), rgba(115, 87, 255, 0.95));
-          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.16);
+          background: linear-gradient(135deg, #168cff 0%, #4d72ff 52%, #7357ff 100%);
+          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.18), 0 4px 18px rgba(115, 87, 255, 0.10);
         }
 
         .orbi-primary-btn:hover {
@@ -5095,8 +5100,8 @@ export default function Dashboard() {
         .orbi-wallet-bar,
         .orbi-card {
           border: 1px solid var(--od-border);
-          background: rgba(10, 15, 24, 0.78);
-          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.14);
+          background: linear-gradient(145deg, rgba(10, 16, 27, 0.88), rgba(6, 11, 19, 0.82));
+          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.015);
           backdrop-filter: blur(16px);
           -webkit-backdrop-filter: blur(16px);
         }
@@ -5200,7 +5205,7 @@ export default function Dashboard() {
           padding: 18px;
           border: 1px solid var(--od-border);
           border-radius: 15px;
-          background: linear-gradient(145deg, rgba(14, 21, 34, 0.92), rgba(8, 13, 21, 0.82));
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
           position: relative;
           overflow: hidden;
         }
@@ -5224,8 +5229,8 @@ export default function Dashboard() {
           place-items: center;
           border-radius: 10px;
           color: #9bcfff;
-          background: rgba(22, 140, 255, 0.08);
-          border: 1px solid rgba(22, 140, 255, 0.14);
+          background: linear-gradient(135deg, rgba(22, 140, 255, 0.12), rgba(115, 87, 255, 0.07));
+          border: 1px solid rgba(22, 140, 255, 0.20);
           margin-bottom: 18px;
         }
 
@@ -5649,7 +5654,7 @@ export default function Dashboard() {
           padding: 15px;
           border: 1px solid var(--od-border);
           border-radius: 14px;
-          background: linear-gradient(145deg, rgba(14, 21, 34, 0.92), rgba(8, 13, 21, 0.82));
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
         }
 
         .orbi-package-overview-grid span,
@@ -6115,8 +6120,9 @@ export default function Dashboard() {
             padding: 0 15px;
             margin: -1px -1px 22px;
             border-bottom: 1px solid var(--od-border);
-            background: rgba(3, 5, 8, 0.86);
-            backdrop-filter: blur(16px);
+            background: rgba(3, 5, 8, 0.92);
+            backdrop-filter: blur(18px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.16);
           }
 
           .orbi-mobile-brand {
@@ -6213,7 +6219,7 @@ export default function Dashboard() {
           padding: 15px;
           border: 1px solid var(--od-border);
           border-radius: 14px;
-          background: linear-gradient(145deg, rgba(14, 21, 34, 0.92), rgba(8, 13, 21, 0.82));
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
         }
 
         .orbi-emergency-overview span {
@@ -6945,6 +6951,56 @@ export default function Dashboard() {
           line-height: 1.5;
         }
 
+        .orbi-mobile-overlay {
+          display: none;
+        }
+
+        @media (max-width: 1024px) {
+          .orbi-main {
+            padding-left: 24px;
+            padding-right: 24px;
+          }
+
+          .orbi-stat-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-two-column {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 850px) {
+          .orbi-mobile-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 45;
+            display: block;
+            border: 0;
+            padding: 0;
+            background: rgba(0, 0, 0, 0.58);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+          }
+
+          .orbi-sidebar {
+            width: min(290px, 84vw);
+          }
+
+          .orbi-mobile-top {
+            margin-left: -16px;
+            margin-right: -16px;
+          }
+
+          .orbi-welcome h1 {
+            font-size: clamp(28px, 6vw, 38px);
+          }
+
+          .orbi-connect-panel {
+            min-height: 0;
+          }
+        }
+
         @media (max-width: 640px) {
           .orbi-package-overview-grid,
           .orbi-package-grid-page,
@@ -7054,6 +7110,98 @@ export default function Dashboard() {
           .orbi-card {
             padding: 16px;
           }
+          .orbi-main {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 28px;
+          }
+
+          .orbi-welcome {
+            margin-bottom: 18px;
+            gap: 14px;
+          }
+
+          .orbi-welcome h1 {
+            font-size: clamp(25px, 8vw, 34px);
+            line-height: 1.08;
+          }
+
+          .orbi-welcome p {
+            font-size: 12px;
+          }
+
+          .orbi-refresh-btn {
+            width: 100%;
+          }
+
+          .orbi-wallet-bar {
+            padding: 12px 13px;
+          }
+
+          .orbi-wallet-left {
+            min-width: 0;
+          }
+
+          .orbi-wallet-left strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 190px;
+          }
+
+          .orbi-stat {
+            min-height: 125px;
+            padding: 15px;
+          }
+
+          .orbi-stat-icon {
+            margin-bottom: 13px;
+          }
+
+          .orbi-stat-value {
+            font-size: 22px;
+          }
+
+          .orbi-card {
+            padding: 15px;
+            border-radius: 14px;
+          }
+
+          .orbi-card-head {
+            margin-bottom: 14px;
+          }
+
+          .orbi-card h2 {
+            font-size: 17px;
+          }
+
+          .orbi-mobile-brand {
+            color: #fff;
+            text-shadow: 0 0 18px rgba(22,140,255,0.28);
+          }
+
+        }
+
+        @media (max-width: 420px) {
+          .orbi-stat-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-package-stats {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-balance-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-welcome h1 {
+            font-size: 27px;
+          }
+
+          .orbi-wallet-left strong {
+            max-width: 150px;
+          }
         }
       `}</style>
 
@@ -7109,6 +7257,15 @@ export default function Dashboard() {
           BNB SMART CHAIN TESTNET
         </div>
       </aside>
+
+      {mobileOpen && (
+        <button
+          type="button"
+          className="orbi-mobile-overlay"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close navigation"
+        />
+      )}
 
       <section className="orbi-main">
         <div className="orbi-mobile-top">
