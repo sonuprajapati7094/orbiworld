@@ -4860,7 +4860,7 @@ export default function Dashboard() {
 
         .orbi-brand-logo {
           display: block;
-          width: 150px;
+          width: 115px;
           height: auto;
           object-fit: contain;
         }
