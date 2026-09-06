@@ -6,7 +6,7 @@ import { ethers } from "ethers";
    ================================================================ */
 
 export const ORBI_WORLD_ADDRESS =
-  "0xA03f714cA52F5e9883a0AEa2933c88e3BE4Fe65F";
+  "0xa03f714ca52f5e9883a0aea2933c88e3be4fe65f";
 
 // ERC20 spender for MOCUSDT approvals. Always use the same canonical
 // deployed ORBI WORLD address; do not duplicate this address in page files.
