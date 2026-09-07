@@ -2,12540 +2,7575 @@
 
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-
 import { ethers } from "ethers";
-
 import {
-
-  BLOCK_EXPLORER,
-
-  BSC_TESTNET_CHAIN_ID,
-
-  getMocusdtReadContract,
-
-  getMocusdtWriteContract,
-
-  getOrbiWorldReadContract,
-
-  getOrbiWorldWriteContract,
-
-  ORBI_WORLD_SPENDER_ADDRESS,
-
-  isCorrectNetwork,
-
-  parseUSDT,
-
-  shortAddress,
-
-  USER_STATUS,
-
-  PACKAGE_STATUS,
-
+  BLOCK_EXPLORER,
+  BSC_TESTNET_CHAIN_ID,
+  getMocusdtReadContract,
+  getMocusdtWriteContract,
+  getOrbiWorldReadContract,
+  getOrbiWorldWriteContract,
+  ORBI_WORLD_SPENDER_ADDRESS,
+  isCorrectNetwork,
+  parseUSDT,
+  shortAddress,
+  USER_STATUS,
+  PACKAGE_STATUS,
 } from "../../lib/contract";
 
 
 // Minimal ABI kept local so the Level Income module can read its own
-
 // configuration/history without changing the existing contract helper.
-
 const LEVEL_INCOME_READ_ABI = [
-
-  "function getLevelIncomeConfig() view returns (uint16[10] incomeBps,bool enabled)",
-
-  "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
-
+  "function getLevelIncomeConfig() view returns (uint16[10] incomeBps,bool enabled)",
+  "event LevelIncomePaid(uint256 indexed fromUserId,uint256 indexed toUserId,uint8 level,uint256 amount)",
 ] as const;
 
 /* =========================================================
-
-   ORBI WORLD — DECENTRALIZED DASHBOARD
-
-   Source of truth:
-
-   - ORBI WORLD smart contract
-
-   - MOCUSDT smart contract
-
-   - Connected wallet
-
-   No financial/user values are hardcoded.
-
+   ORBI WORLD — DECENTRALIZED DASHBOARD
+   Source of truth:
+   - ORBI WORLD smart contract
+   - MOCUSDT smart contract
+   - Connected wallet
+   No financial/user values are hardcoded.
 ========================================================= */
 
 type WalletProvider = ethers.Eip1193Provider & {
-
-  on?: (event: string, listener: (...args: unknown[]) => void) => void;
-
-  removeListener?: (
-
-    event: string,
-
-    listener: (...args: unknown[]) => void
-
-  ) => void;
-
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (
+    event: string,
+    listener: (...args: unknown[]) => void
+  ) => void;
 };
 
 type UserData = {
-
-  id: bigint;
-
-  wallet: string;
-
-  sponsorId: bigint;
-
-  status: bigint;
-
-  directCount: bigint;
-
-  activeDirectCount: bigint;
-
-  lifetimeBusiness: bigint;
-
-  monthlyBusiness: bigint;
-
-  todayBusiness: bigint;
-
-  powerLegBusiness: bigint;
-
-  otherLegBusiness: bigint;
-
-  earningWallet: bigint;
-
-  rankWallet: bigint;
-
-  royaltyWallet: bigint;
-
-  totalROIIncome: bigint;
-
-  totalLevelIncome: bigint;
-
-  totalRankIncome: bigint;
-
-  totalRoyaltyIncome: bigint;
-
-  totalWithdrawn: bigint;
-
-  rank: bigint;
-
-  royalty: bigint;
-
+  id: bigint;
+  wallet: string;
+  sponsorId: bigint;
+  status: bigint;
+  directCount: bigint;
+  activeDirectCount: bigint;
+  lifetimeBusiness: bigint;
+  monthlyBusiness: bigint;
+  todayBusiness: bigint;
+  powerLegBusiness: bigint;
+  otherLegBusiness: bigint;
+  earningWallet: bigint;
+  rankWallet: bigint;
+  royaltyWallet: bigint;
+  totalROIIncome: bigint;
+  totalLevelIncome: bigint;
+  totalRankIncome: bigint;
+  totalRoyaltyIncome: bigint;
+  totalWithdrawn: bigint;
+  rank: bigint;
+  royalty: bigint;
 };
 
 type PackageData = {
-
-  packageId: bigint;
-
-  userId: bigint;
-
-  amount: bigint;
-
-  maxPayout: bigint;
-
-  roiPaid: bigint;
-
-  levelPaid: bigint;
-
-  totalPaid: bigint;
-
-  startTime: bigint;
-
-  lastProcessedDay: bigint;
-
-  closedTime: bigint;
-
-  emergencyClosed: boolean;
-
-  status: bigint;
-
-  queueIndex: bigint;
-
-  activeUserPackageIndex: bigint;
-
-  exists: boolean;
-
+  packageId: bigint;
+  userId: bigint;
+  amount: bigint;
+  maxPayout: bigint;
+  roiPaid: bigint;
+  levelPaid: bigint;
+  totalPaid: bigint;
+  startTime: bigint;
+  lastProcessedDay: bigint;
+  closedTime: bigint;
+  emergencyClosed: boolean;
+  status: bigint;
+  queueIndex: bigint;
+  activeUserPackageIndex: bigint;
+  exists: boolean;
 };
 
 type TeamMember = UserData & {
-
-  teamDepth: number;
-
-  activityLabel: string;
-
+  teamDepth: number;
+  activityLabel: string;
 };
 
 type LevelIncomeEntry = {
-
-  fromUserId: bigint;
-
-  toUserId: bigint;
-
-  level: bigint;
-
-  amount: bigint;
-
-  blockNumber: number;
-
-  timestamp: number;
-
+  fromUserId: bigint;
+  toUserId: bigint;
+  level: bigint;
+  amount: bigint;
+  blockNumber: number;
+  timestamp: number;
 };
 
 type RankRequirementData = {
+  requiredPowerLeg: bigint;
+  requiredOtherLeg: bigint;
+  reward: bigint;
+};
 
-  requiredPowerLeg: bigint;
-
-  requiredOtherLeg: bigint;
-
-  reward: bigint;
-
+type RoyaltyRequirementData = {
+  requiredLifetimeBusiness: bigint;
+  requiredMonthlyBusiness: bigint;
+  minimumActiveDirects: bigint;
+  royaltyBps: bigint;
 };
 
 type WithdrawalHistoryRow = {
-
-  requestId: bigint;
-
-  userId: bigint;
-
-  walletType: number;
-
-  amount: bigint;
-
-  fee: bigint;
-
-  netAmount: bigint;
-
-  status: "PENDING" | "APPROVED" | "REJECTED";
-
-  blockNumber: number;
-
-  timestamp: number;
-
+  requestId: bigint;
+  userId: bigint;
+  walletType: number;
+  amount: bigint;
+  fee: bigint;
+  netAmount: bigint;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  blockNumber: number;
+  timestamp: number;
 };
 
 // The deployed ORBI WORLD contract exposes only rankRewardEnabled through
-
 // the autogenerated s_rankConfig() getter because the rank array is a
-
 // fixed-size nested struct. The deployed storage layout places s_rankConfig
-
 // at slot 14; each RankRequirement occupies 3 consecutive uint256 slots.
-
 const RANK_CONFIG_BASE_SLOT = 14n;
-
 const RANK_REQUIREMENT_SLOT_WIDTH = 3n;
 
+// The deployed ORBI WORLD contract stores s_royaltyConfig at slot 68.
+// Each RoyaltyRequirement occupies 3 slots (uint256, uint256, packed uint8+uint16),
+// and royaltyEnabled is stored at slot 74. These constants mirror the deployed
+// storage layout so the dashboard reads the live configuration without copying
+// the royalty thresholds into frontend code.
+const ROYALTY_CONFIG_BASE_SLOT = 68n;
+const ROYALTY_REQUIREMENT_SLOT_WIDTH = 3n;
+const ROYALTY_ENABLED_SLOT = 74n;
+
 type DashboardState = {
-
-  user: UserData;
-
-  packageIds: bigint[];
-
-  activePackageIds: bigint[];
-
-  directReferralIds: bigint[];
-
+  user: UserData;
+  packageIds: bigint[];
+  activePackageIds: bigint[];
+  directReferralIds: bigint[];
 };
 
 const EMPTY_USER: UserData = {
-
-  id: 0n,
-
-  wallet: ethers.ZeroAddress,
-
-  sponsorId: 0n,
-
-  status: 0n,
-
-  directCount: 0n,
-
-  activeDirectCount: 0n,
-
-  lifetimeBusiness: 0n,
-
-  monthlyBusiness: 0n,
-
-  todayBusiness: 0n,
-
-  powerLegBusiness: 0n,
-
-  otherLegBusiness: 0n,
-
-  earningWallet: 0n,
-
-  rankWallet: 0n,
-
-  royaltyWallet: 0n,
-
-  totalROIIncome: 0n,
-
-  totalLevelIncome: 0n,
-
-  totalRankIncome: 0n,
-
-  totalRoyaltyIncome: 0n,
-
-  totalWithdrawn: 0n,
-
-  rank: 0n,
-
-  royalty: 0n,
-
+  id: 0n,
+  wallet: ethers.ZeroAddress,
+  sponsorId: 0n,
+  status: 0n,
+  directCount: 0n,
+  activeDirectCount: 0n,
+  lifetimeBusiness: 0n,
+  monthlyBusiness: 0n,
+  todayBusiness: 0n,
+  powerLegBusiness: 0n,
+  otherLegBusiness: 0n,
+  earningWallet: 0n,
+  rankWallet: 0n,
+  royaltyWallet: 0n,
+  totalROIIncome: 0n,
+  totalLevelIncome: 0n,
+  totalRankIncome: 0n,
+  totalRoyaltyIncome: 0n,
+  totalWithdrawn: 0n,
+  rank: 0n,
+  royalty: 0n,
 };
 
 const EMPTY_DASHBOARD: DashboardState = {
-
-  user: EMPTY_USER,
-
-  packageIds: [],
-
-  activePackageIds: [],
-
-  directReferralIds: [],
-
+  user: EMPTY_USER,
+  packageIds: [],
+  activePackageIds: [],
+  directReferralIds: [],
 };
 
 const toBigInt = (value: unknown): bigint => {
-
-  try {
-
-    return BigInt(value as string | number | bigint);
-
-  } catch {
-
-    return 0n;
-
-  }
-
+  try {
+    return BigInt(value as string | number | bigint);
+  } catch {
+    return 0n;
+  }
 };
 
 const normalizeUser = (value: any): UserData => ({
-
-  id: toBigInt(value?.id ?? value?.[0]),
-
-  wallet: String(value?.wallet ?? value?.[1] ?? ethers.ZeroAddress),
-
-  sponsorId: toBigInt(value?.sponsorId ?? value?.[2]),
-
-  status: toBigInt(value?.status ?? value?.[3]),
-
-  directCount: toBigInt(value?.directCount ?? value?.[4]),
-
-  activeDirectCount: toBigInt(value?.activeDirectCount ?? value?.[5]),
-
-  lifetimeBusiness: toBigInt(value?.lifetimeBusiness ?? value?.[6]),
-
-  monthlyBusiness: toBigInt(value?.monthlyBusiness ?? value?.[7]),
-
-  todayBusiness: toBigInt(value?.todayBusiness ?? value?.[8]),
-
-  powerLegBusiness: toBigInt(value?.powerLegBusiness ?? value?.[9]),
-
-  otherLegBusiness: toBigInt(value?.otherLegBusiness ?? value?.[10]),
-
-  earningWallet: toBigInt(value?.earningWallet ?? value?.[11]),
-
-  rankWallet: toBigInt(value?.rankWallet ?? value?.[12]),
-
-  royaltyWallet: toBigInt(value?.royaltyWallet ?? value?.[13]),
-
-  totalROIIncome: toBigInt(value?.totalROIIncome ?? value?.[14]),
-
-  totalLevelIncome: toBigInt(value?.totalLevelIncome ?? value?.[15]),
-
-  totalRankIncome: toBigInt(value?.totalRankIncome ?? value?.[16]),
-
-  totalRoyaltyIncome: toBigInt(value?.totalRoyaltyIncome ?? value?.[17]),
-
-  totalWithdrawn: toBigInt(value?.totalWithdrawn ?? value?.[18]),
-
-  rank: toBigInt(value?.rank ?? value?.[19]),
-
-  royalty: toBigInt(value?.royalty ?? value?.[20]),
-
+  id: toBigInt(value?.id ?? value?.[0]),
+  wallet: String(value?.wallet ?? value?.[1] ?? ethers.ZeroAddress),
+  sponsorId: toBigInt(value?.sponsorId ?? value?.[2]),
+  status: toBigInt(value?.status ?? value?.[3]),
+  directCount: toBigInt(value?.directCount ?? value?.[4]),
+  activeDirectCount: toBigInt(value?.activeDirectCount ?? value?.[5]),
+  lifetimeBusiness: toBigInt(value?.lifetimeBusiness ?? value?.[6]),
+  monthlyBusiness: toBigInt(value?.monthlyBusiness ?? value?.[7]),
+  todayBusiness: toBigInt(value?.todayBusiness ?? value?.[8]),
+  powerLegBusiness: toBigInt(value?.powerLegBusiness ?? value?.[9]),
+  otherLegBusiness: toBigInt(value?.otherLegBusiness ?? value?.[10]),
+  earningWallet: toBigInt(value?.earningWallet ?? value?.[11]),
+  rankWallet: toBigInt(value?.rankWallet ?? value?.[12]),
+  royaltyWallet: toBigInt(value?.royaltyWallet ?? value?.[13]),
+  totalROIIncome: toBigInt(value?.totalROIIncome ?? value?.[14]),
+  totalLevelIncome: toBigInt(value?.totalLevelIncome ?? value?.[15]),
+  totalRankIncome: toBigInt(value?.totalRankIncome ?? value?.[16]),
+  totalRoyaltyIncome: toBigInt(value?.totalRoyaltyIncome ?? value?.[17]),
+  totalWithdrawn: toBigInt(value?.totalWithdrawn ?? value?.[18]),
+  rank: toBigInt(value?.rank ?? value?.[19]),
+  royalty: toBigInt(value?.royalty ?? value?.[20]),
 });
 
 const normalizePackage = (value: any): PackageData => ({
-
-  packageId: toBigInt(value?.packageId ?? value?.[0]),
-
-  userId: toBigInt(value?.userId ?? value?.[1]),
-
-  amount: toBigInt(value?.amount ?? value?.[2]),
-
-  maxPayout: toBigInt(value?.maxPayout ?? value?.[3]),
-
-  roiPaid: toBigInt(value?.roiPaid ?? value?.[4]),
-
-  levelPaid: toBigInt(value?.levelPaid ?? value?.[5]),
-
-  totalPaid: toBigInt(value?.totalPaid ?? value?.[6]),
-
-  startTime: toBigInt(value?.startTime ?? value?.[7]),
-
-  lastProcessedDay: toBigInt(value?.lastProcessedDay ?? value?.[8]),
-
-  closedTime: toBigInt(value?.closedTime ?? value?.[9]),
-
-  emergencyClosed: Boolean(value?.emergencyClosed ?? value?.[10]),
-
-  status: toBigInt(value?.status ?? value?.[11]),
-
-  queueIndex: toBigInt(value?.queueIndex ?? value?.[12]),
-
-  activeUserPackageIndex: toBigInt(
-
-    value?.activeUserPackageIndex ?? value?.[13]
-
-  ),
-
-  exists: Boolean(value?.exists ?? value?.[14]),
-
+  packageId: toBigInt(value?.packageId ?? value?.[0]),
+  userId: toBigInt(value?.userId ?? value?.[1]),
+  amount: toBigInt(value?.amount ?? value?.[2]),
+  maxPayout: toBigInt(value?.maxPayout ?? value?.[3]),
+  roiPaid: toBigInt(value?.roiPaid ?? value?.[4]),
+  levelPaid: toBigInt(value?.levelPaid ?? value?.[5]),
+  totalPaid: toBigInt(value?.totalPaid ?? value?.[6]),
+  startTime: toBigInt(value?.startTime ?? value?.[7]),
+  lastProcessedDay: toBigInt(value?.lastProcessedDay ?? value?.[8]),
+  closedTime: toBigInt(value?.closedTime ?? value?.[9]),
+  emergencyClosed: Boolean(value?.emergencyClosed ?? value?.[10]),
+  status: toBigInt(value?.status ?? value?.[11]),
+  queueIndex: toBigInt(value?.queueIndex ?? value?.[12]),
+  activeUserPackageIndex: toBigInt(
+    value?.activeUserPackageIndex ?? value?.[13]
+  ),
+  exists: Boolean(value?.exists ?? value?.[14]),
 });
 
 const formatUsdt = (value: bigint, max = 2) => {
+  const raw = ethers.formatUnits(value, 18);
+  const number = Number(raw);
 
-  const raw = ethers.formatUnits(value, 18);
-
-  const number = Number(raw);
-
-  if (!Number.isFinite(number)) return "0.00";
-
-  return number.toLocaleString("en-US", {
-
-    minimumFractionDigits: 2,
-
-    maximumFractionDigits: max,
-
-  });
-
+  if (!Number.isFinite(number)) return "0.00";
+  return number.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: max,
+  });
 };
 
 const formatInteger = (value: bigint) =>
-
-  value.toLocaleString("en-US");
+  value.toLocaleString("en-US");
 
 const statusLabel = (status: bigint) => {
-
-  switch (Number(status)) {
-
-    case USER_STATUS.ACTIVE:
-
-      return "ACTIVE";
-
-    case USER_STATUS.INACTIVE:
-
-      return "INACTIVE";
-
-    case USER_STATUS.EMERGENCY_EXIT:
-
-      return "EMERGENCY EXIT";
-
-    case USER_STATUS.BLACKLISTED:
-
-      return "BLACKLISTED";
-
-    default:
-
-      return "NOT REGISTERED";
-
-  }
-
+  switch (Number(status)) {
+    case USER_STATUS.ACTIVE:
+      return "ACTIVE";
+    case USER_STATUS.INACTIVE:
+      return "INACTIVE";
+    case USER_STATUS.EMERGENCY_EXIT:
+      return "EMERGENCY EXIT";
+    case USER_STATUS.BLACKLISTED:
+      return "BLACKLISTED";
+    default:
+      return "NOT REGISTERED";
+  }
 };
 
 const packageStatusLabel = (status: bigint, emergencyClosed: boolean) => {
-
-  if (emergencyClosed) return "EMERGENCY CLOSED";
-
-  if (Number(status) === PACKAGE_STATUS.CLOSED) return "CLOSED";
-
-  return "ACTIVE";
-
+  if (emergencyClosed) return "EMERGENCY CLOSED";
+  if (Number(status) === PACKAGE_STATUS.CLOSED) return "CLOSED";
+  return "ACTIVE";
 };
 
 const formatDate = (timestamp: bigint) => {
+  if (timestamp <= 0n) return "—";
 
-  if (timestamp <= 0n) return "—";
+  const date = new Date(Number(timestamp) * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
 
-  const date = new Date(Number(timestamp) * 1000);
-
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return date.toLocaleDateString("en-US", {
-
-    day: "2-digit",
-
-    month: "short",
-
-    year: "numeric",
-
-  });
-
+  return date.toLocaleDateString("en-US", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 };
 
 function Icon({
-
-  name,
-
-  size = 19,
-
+  name,
+  size = 19,
 }: {
-
-  name: string;
-
-  size?: number;
-
+  name: string;
+  size?: number;
 }) {
-
-  const common = {
-
-    width: size,
-
-    height: size,
-
-    viewBox: "0 0 24 24",
-
-    fill: "none",
-
-    stroke: "currentColor",
-
-    strokeWidth: 1.8,
-
-    strokeLinecap: "round" as const,
-
-    strokeLinejoin: "round" as const,
-
-  };
-
-  const paths: Record<string, React.ReactNode> = {
-
-    dashboard: (
-
-      <>
-
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-
-        <rect x="14" y="14" width="7" height="7" rx="1" />
-
-      </>
-
-    ),
-
-    package: (
-
-      <>
-
-        <path d="m12 3 8 4.5-8 4.5-8-4.5L12 3Z" />
-
-        <path d="m4 12 8 4.5 8-4.5" />
-
-        <path d="m4 16.5 8 4.5 8-4.5" />
-
-        <path d="M12 12v9" />
-
-      </>
-
-    ),
-
-    team: (
-
-      <>
-
-        <circle cx="9" cy="8" r="3" />
-
-        <circle cx="17" cy="9" r="2.5" />
-
-        <path d="M3.5 20c.7-3.2 2.6-5 5.5-5s4.8 1.8 5.5 5" />
-
-        <path d="M14 15.5c2.9-.1 4.9 1.4 5.5 4.5" />
-
-      </>
-
-    ),
-
-    link: (
-
-      <>
-
-        <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
-
-        <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 7 20l1.1-1.1" />
-
-      </>
-
-    ),
-
-    trophy: (
-
-      <>
-
-        <path d="M8 4h8v4a4 4 0 0 1-8 0V4Z" />
-
-        <path d="M8 6H4v1a4 4 0 0 0 4 4" />
-
-        <path d="M16 6h4v1a4 4 0 0 1-4 4" />
-
-        <path d="M12 12v5" />
-
-        <path d="M8 21h8" />
-
-        <path d="M9 17h6" />
-
-      </>
-
-    ),
-
-    diamond: (
-
-      <>
-
-        <path d="m12 3 8 6-8 12L4 9l8-6Z" />
-
-        <path d="m4 9 8 2 8-2" />
-
-        <path d="m12 11 0 10" />
-
-      </>
-
-    ),
-
-    money: (
-
-      <>
-
-        <rect x="3" y="5" width="18" height="14" rx="2" />
-
-        <circle cx="12" cy="12" r="3" />
-
-        <path d="M7 8h.01M17 16h.01" />
-
-      </>
-
-    ),
-
-    withdraw: (
-
-      <>
-
-        <path d="M12 3v12" />
-
-        <path d="m7 10 5 5 5-5" />
-
-        <path d="M5 21h14" />
-
-      </>
-
-    ),
-
-    network: (
-
-      <>
-
-        <path d="M12 3v4" />
-
-        <path d="M6.5 7.5 9 10" />
-
-        <path d="M17.5 7.5 15 10" />
-
-        <path d="M5 14h4" />
-
-        <path d="M15 14h4" />
-
-        <circle cx="12" cy="13" r="3" />
-
-      </>
-
-    ),
-
-    alert: (
-
-      <>
-
-        <path d="m12 3 9 17H3L12 3Z" />
-
-        <path d="M12 9v4" />
-
-        <path d="M12 17h.01" />
-
-      </>
-
-    ),
-
-    settings: (
-
-      <>
-
-        <circle cx="12" cy="12" r="3" />
-
-        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-2.5v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H6V11.5h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1L9 6.7l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V5h2.5v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1V14h-.1a1.7 1.7 0 0 0-1.5 1Z" />
-
-      </>
-
-    ),
-
-    activity: (
-
-      <>
-
-        <path d="M3 12h4l2-6 4 12 2-6h6" />
-
-      </>
-
-    ),
-
-    copy: (
-
-      <>
-
-        <rect x="9" y="9" width="11" height="11" rx="2" />
-
-        <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
-
-      </>
-
-    ),
-
-    wallet: (
-
-      <>
-
-        <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H19a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 17.5v-11Z" />
-
-        <path d="M4 7h14" />
-
-        <path d="M16 13h4" />
-
-        <circle cx="16" cy="13" r=".5" fill="currentColor" />
-
-      </>
-
-    ),
-
-    refresh: (
-
-      <>
-
-        <path d="M20 11a8 8 0 0 0-14-5L4 8" />
-
-        <path d="M4 4v4h4" />
-
-        <path d="M4 13a8 8 0 0 0 14 5l2-2" />
-
-        <path d="M20 20v-4h-4" />
-
-      </>
-
-    ),
-
-    external: (
-
-      <>
-
-        <path d="M14 4h6v6" />
-
-        <path d="m20 4-9 9" />
-
-        <path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
-
-      </>
-
-    ),
-
-    menu: (
-
-      <>
-
-        <path d="M4 6h16M4 12h16M4 18h16" />
-
-      </>
-
-    ),
-
-    close: (
-
-      <>
-
-        <path d="m6 6 12 12M18 6 6 18" />
-
-      </>
-
-    ),
-
-  };
-
-  return <svg {...common}>{paths[name] ?? paths.dashboard}</svg>;
-
+  const common = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  const paths: Record<string, React.ReactNode> = {
+    dashboard: (
+      <>
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </>
+    ),
+    package: (
+      <>
+        <path d="m12 3 8 4.5-8 4.5-8-4.5L12 3Z" />
+        <path d="m4 12 8 4.5 8-4.5" />
+        <path d="m4 16.5 8 4.5 8-4.5" />
+        <path d="M12 12v9" />
+      </>
+    ),
+    team: (
+      <>
+        <circle cx="9" cy="8" r="3" />
+        <circle cx="17" cy="9" r="2.5" />
+        <path d="M3.5 20c.7-3.2 2.6-5 5.5-5s4.8 1.8 5.5 5" />
+        <path d="M14 15.5c2.9-.1 4.9 1.4 5.5 4.5" />
+      </>
+    ),
+    link: (
+      <>
+        <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+        <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 7 20l1.1-1.1" />
+      </>
+    ),
+    trophy: (
+      <>
+        <path d="M8 4h8v4a4 4 0 0 1-8 0V4Z" />
+        <path d="M8 6H4v1a4 4 0 0 0 4 4" />
+        <path d="M16 6h4v1a4 4 0 0 1-4 4" />
+        <path d="M12 12v5" />
+        <path d="M8 21h8" />
+        <path d="M9 17h6" />
+      </>
+    ),
+    diamond: (
+      <>
+        <path d="m12 3 8 6-8 12L4 9l8-6Z" />
+        <path d="m4 9 8 2 8-2" />
+        <path d="m12 11 0 10" />
+      </>
+    ),
+    money: (
+      <>
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <circle cx="12" cy="12" r="3" />
+        <path d="M7 8h.01M17 16h.01" />
+      </>
+    ),
+    withdraw: (
+      <>
+        <path d="M12 3v12" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M5 21h14" />
+      </>
+    ),
+    network: (
+      <>
+        <path d="M12 3v4" />
+        <path d="M6.5 7.5 9 10" />
+        <path d="M17.5 7.5 15 10" />
+        <path d="M5 14h4" />
+        <path d="M15 14h4" />
+        <circle cx="12" cy="13" r="3" />
+      </>
+    ),
+    alert: (
+      <>
+        <path d="m12 3 9 17H3L12 3Z" />
+        <path d="M12 9v4" />
+        <path d="M12 17h.01" />
+      </>
+    ),
+    settings: (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-2.5v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H6V11.5h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1L9 6.7l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V5h2.5v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1V14h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+      </>
+    ),
+    activity: (
+      <>
+        <path d="M3 12h4l2-6 4 12 2-6h6" />
+      </>
+    ),
+    copy: (
+      <>
+        <rect x="9" y="9" width="11" height="11" rx="2" />
+        <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
+      </>
+    ),
+    wallet: (
+      <>
+        <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H19a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 17.5v-11Z" />
+        <path d="M4 7h14" />
+        <path d="M16 13h4" />
+        <circle cx="16" cy="13" r=".5" fill="currentColor" />
+      </>
+    ),
+    refresh: (
+      <>
+        <path d="M20 11a8 8 0 0 0-14-5L4 8" />
+        <path d="M4 4v4h4" />
+        <path d="M4 13a8 8 0 0 0 14 5l2-2" />
+        <path d="M20 20v-4h-4" />
+      </>
+    ),
+    external: (
+      <>
+        <path d="M14 4h6v6" />
+        <path d="m20 4-9 9" />
+        <path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
+      </>
+    ),
+    menu: (
+      <>
+        <path d="M4 6h16M4 12h16M4 18h16" />
+      </>
+    ),
+    close: (
+      <>
+        <path d="m6 6 12 12M18 6 6 18" />
+      </>
+    ),
+  };
+
+  return <svg {...common}>{paths[name] ?? paths.dashboard}</svg>;
 }
 
 const navItems = [
-
-  { label: "Dashboard", icon: "dashboard" },
-
-  { label: "My Packages", icon: "package" },
-
-  { label: "My Team", icon: "team" },
-
-  { label: "Level Income", icon: "link" },
-
-  { label: "Rank & Rewards", icon: "trophy" },
-
-
-  { label: "Earnings", icon: "money" },
-
-  { label: "Withdraw", icon: "withdraw" },
-
-  { label: "Emergency Exit", icon: "alert", danger: true },
-
+  { label: "Dashboard", icon: "dashboard" },
+  { label: "My Packages", icon: "package" },
+  { label: "My Team", icon: "team" },
+  { label: "Level Income", icon: "link" },
+  { label: "Rank & Rewards", icon: "trophy" },
+  { label: "Royalty", icon: "diamond" },
+  { label: "Earnings", icon: "money" },
+  { label: "Withdraw", icon: "withdraw" },
+  { label: "Emergency Exit", icon: "alert", danger: true },
 ];
 
 const utilityItems = [
-
-  { label: "Settings", icon: "settings" },
-
-  { label: "Referral", icon: "link" },
-
+  { label: "Settings", icon: "settings" },
+  { label: "Referral", icon: "link" },
 ];
 
 export default function Dashboard() {
-
-  const [wallet, setWallet] = useState("");
-
-  const [provider, setProvider] = useState<WalletProvider | null>(null);
-
-  const [dashboard, setDashboard] =
-
-    useState<DashboardState>(EMPTY_DASHBOARD);
-
-  const [packages, setPackages] = useState<PackageData[]>([]);
-
-  const [usdtBalance, setUsdtBalance] = useState<bigint>(0n);
-
-  const [nativeBalance, setNativeBalance] = useState<bigint>(0n);
-
-  const [activeNav, setActiveNav] = useState("Dashboard");
-
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  const [copied, setCopied] = useState(false);
-
-  const [loading, setLoading] = useState(false);
-
-  const [networkError, setNetworkError] = useState("");
-
-  const [error, setError] = useState("");
-
-  // Stake / top-up modal state. The same modal handles first activation
-
-  // and subsequent top-ups using the current on-chain account status.
-
-  const [stakeModalOpen, setStakeModalOpen] = useState(false);
-
-  const [stakeAmount, setStakeAmount] = useState("");
-
-  const [minimumStake, setMinimumStake] = useState(0n);
-
-  const [stakeBusy, setStakeBusy] = useState(false);
-
-  const [stakeStep, setStakeStep] = useState<"idle" | "approving" | "staking">("idle");
-
-  const [stakeMessage, setStakeMessage] = useState("");
-
-  const [stakeTxHash, setStakeTxHash] = useState("");
-
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-
-  const [teamLoading, setTeamLoading] = useState(false);
-
-  const [teamError, setTeamError] = useState("");
-
-  const [teamLoadedFor, setTeamLoadedFor] = useState("");
-
-  const [teamIndirectCount, setTeamIndirectCount] = useState<bigint>(0n);
-
-  const [referralLegBusiness, setReferralLegBusiness] = useState<Record<string, bigint>>({});
-
-  const [referralBusinessLoading, setReferralBusinessLoading] = useState(false);
-
-  const [referralBusinessError, setReferralBusinessError] = useState("");
-
-  const [levelIncomeBps, setLevelIncomeBps] = useState<bigint[]>(Array(10).fill(0n));
-
-  const [levelIncomeEnabled, setLevelIncomeEnabled] = useState(false);
-
-  const [levelIncomeHistory, setLevelIncomeHistory] = useState<LevelIncomeEntry[]>([]);
-
-  const [levelIncomeLoading, setLevelIncomeLoading] = useState(false);
-
-  const [levelIncomeError, setLevelIncomeError] = useState("");
-
-  const [rankRequirements, setRankRequirements] = useState<RankRequirementData[]>([]);
-
-  const [rankRewardEnabled, setRankRewardEnabled] = useState(false);
-
-  const [rankLoading, setRankLoading] = useState(false);
-
-  const [rankError, setRankError] = useState("");
-
-
-
-
-
-  const [withdrawAmount, setWithdrawAmount] = useState("");
-
-  const [withdrawWallet, setWithdrawWallet] = useState(0);
-
-  const [withdrawalMinimum, setWithdrawalMinimum] = useState(20n * 10n ** 18n);
-
-  const [withdrawalFeeBps, setWithdrawalFeeBps] = useState(1000n);
-
-  const [withdrawalEnabled, setWithdrawalEnabled] = useState(false);
-
-  const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalHistoryRow[]>([]);
-
-  const [withdrawalLoading, setWithdrawalLoading] = useState(false);
-
-  const [withdrawalError, setWithdrawalError] = useState("");
-
-  const [withdrawalBusy, setWithdrawalBusy] = useState(false);
-
-  const [withdrawalMessage, setWithdrawalMessage] = useState("");
-
-  const [withdrawalTxHash, setWithdrawalTxHash] = useState("");
-
-  // Emergency Exit state — isolated from all existing dashboard modules.
-
-  const [emergencyEnabled, setEmergencyEnabled] = useState(false);
-
-  const [emergencyLoading, setEmergencyLoading] = useState(false);
-
-  const [emergencyBusy, setEmergencyBusy] = useState(false);
-
-  const [emergencyMessage, setEmergencyMessage] = useState("");
-
-  const [emergencyTxHash, setEmergencyTxHash] = useState("");
-
-  const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
-
-  // Settings state — isolated from all existing dashboard modules.
-
-  const [settingsLoading, setSettingsLoading] = useState(false);
-
-  const [settingsError, setSettingsError] = useState("");
-
-  const [settingsCopied, setSettingsCopied] = useState(false);
-
-  const [contractPaused, setContractPaused] = useState(false);
-
-  const [settingsFeatures, setSettingsFeatures] = useState({
-
-    registrationEnabled: false,
-
-    stakingEnabled: false,
-
-    withdrawalEnabled: false,
-
-    capitalWithdrawalEnabled: false,
-
-  });
-
-  const loadDashboard = useCallback(async (walletAddress: string) => {
-
-    if (!walletAddress) return;
-
-    setLoading(true);
-
-    setError("");
-
-    setNetworkError("");
-
-    try {
-
-      const readContract = getOrbiWorldReadContract();
-
-      const usdtContract = getMocusdtReadContract();
-
-      const registered = await readContract.isRegistered(walletAddress);
-
-      const [native, usdt] = await Promise.all([
-
-        getReadBalance(walletAddress),
-
-        usdtContract.balanceOf(walletAddress),
-
-      ]);
-
-      setNativeBalance(native);
-
-      setUsdtBalance(usdt);
-
-      if (!registered) {
-
-        setDashboard(EMPTY_DASHBOARD);
-
-        setPackages([]);
-
-        setError(
-
-          "This wallet is not registered in ORBI WORLD yet. Dashboard data will appear after on-chain registration."
-
-        );
-
-        return;
-
-      }
-
-      const data = await readContract.getDashboardData(
-
-        await readContract.getUserId(walletAddress)
-
-      );
-
-      const normalized: DashboardState = {
-
-        user: normalizeUser(data?.user ?? data?.[0]),
-
-        packageIds: Array.from(data?.packageIds ?? data?.[1] ?? []).map(
-
-          toBigInt
-
-        ),
-
-        activePackageIds: Array.from(
-
-          data?.activePackageIds ?? data?.[2] ?? []
-
-        ).map(toBigInt),
-
-        directReferralIds: Array.from(
-
-          data?.directReferralIds ?? data?.[3] ?? []
-
-        ).map(toBigInt),
-
-      };
-
-      setDashboard(normalized);
-
-      const packageResults = await Promise.all(
-
-        normalized.packageIds.map(async (id) => {
-
-          const result = await readContract.getPackage(id);
-
-          return normalizePackage(result);
-
-        })
-
-      );
-
-      setPackages(packageResults);
-
-    } catch (err) {
-
-      console.error(err);
-
-      setError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load dashboard data from the blockchain."
-
-      );
-
-    } finally {
-
-      setLoading(false);
-
-    }
-
-  }, []);
-
-  async function getReadBalance(address: string): Promise<bigint> {
-
-    try {
-
-      const readProvider = new ethers.JsonRpcProvider(
-
-        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
-
-      );
-
-      return await readProvider.getBalance(address);
-
-    } catch {
-
-      return 0n;
-
-    }
-
-  }
-
-  const connectWallet = useCallback(async () => {
-
-    if (typeof window === "undefined") return;
-
-    const ethereum = (window as Window & {
-
-      ethereum?: WalletProvider;
-
-    }).ethereum;
-
-    if (!ethereum) {
-
-      setError(
-
-        "No compatible wallet detected. Install MetaMask or another EVM wallet."
-
-      );
-
-      return;
-
-    }
-
-    try {
-
-      setError("");
-
-      const browserProvider = new ethers.BrowserProvider(ethereum);
-
-      const accounts = await browserProvider.send("eth_requestAccounts", []);
-
-      if (!accounts?.[0]) return;
-
-      const networkOk = await isCorrectNetwork(browserProvider);
-
-      if (!networkOk) {
-
-        setNetworkError(
-
-          `Wrong network. Please switch your wallet to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
-
-        );
-
-      }
-
-      setProvider(ethereum);
-
-      setWallet(accounts[0]);
-
-      await loadDashboard(accounts[0]);
-
-    } catch (err) {
-
-      console.error(err);
-
-      setError(
-
-        err instanceof Error ? err.message : "Wallet connection failed."
-
-      );
-
-    }
-
-  }, [loadDashboard]);
-
-  const openStakeModal = useCallback(async () => {
-
-    if (!wallet) {
-
-      setError("Connect your wallet before staking a package.");
-
-      return;
-
-    }
-
-    try {
-
-      setError("");
-
-      setStakeMessage("");
-
-      setStakeTxHash("");
-
-      setStakeStep("idle");
-
-      const readContract = getOrbiWorldReadContract();
-
-      const config = await readContract.s_stakingConfig();
-
-      const minimumStakeAmount = toBigInt(
-
-        config?.minimumStake ?? config?.[0]
-
-      );
-
-      const minimumTopupAmount = toBigInt(
-
-        config?.minimumTopup ?? config?.[1]
-
-      );
-
-      const minimum =
-
-        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
-
-          ? minimumTopupAmount
-
-          : minimumStakeAmount;
-
-      setMinimumStake(minimum);
-
-      setStakeAmount(
-
-        minimum > 0n ? ethers.formatUnits(minimum, 18) : ""
-
-      );
-
-      setStakeModalOpen(true);
-
-    } catch (err) {
-
-      console.error(err);
-
-      setError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load staking configuration."
-
-      );
-
-    }
-
-  }, [wallet, dashboard.user.status]);
-
-  const closeStakeModal = useCallback(() => {
-
-    if (stakeBusy) return;
-
-    setStakeModalOpen(false);
-
-    setStakeMessage("");
-
-    setStakeTxHash("");
-
-    setStakeStep("idle");
-
-  }, [stakeBusy]);
-
-  const submitStake = useCallback(async () => {
-
-    if (!wallet || !stakeAmount.trim()) {
-
-      setStakeMessage("Enter a valid amount.");
-
-      return;
-
-    }
-
-    if (!ethers.isAddress(wallet)) {
-
-      setStakeMessage("Connected wallet address is invalid.");
-
-      return;
-
-    }
-
-    let amount: bigint;
-
-    try {
-
-      amount = parseUSDT(stakeAmount.trim());
-
-    } catch {
-
-      setStakeMessage("Enter a valid MOCUSDT amount.");
-
-      return;
-
-    }
-
-    if (amount <= 0n) {
-
-      setStakeMessage("Amount must be greater than zero.");
-
-      return;
-
-    }
-
-    if (minimumStake > 0n && amount < minimumStake) {
-
-      setStakeMessage(
-
-        `Minimum stake is $${formatUsdt(minimumStake)} MOCUSDT.`
-
-      );
-
-      return;
-
-    }
-
-    try {
-
-      setStakeBusy(true);
-
-      setStakeMessage("");
-
-      setStakeTxHash("");
-
-      const ethereum = (window as Window & {
-
-        ethereum?: WalletProvider;
-
-      }).ethereum;
-
-      if (!ethereum) {
-
-        throw new Error("No compatible wallet detected.");
-
-      }
-
-      const browserProvider = new ethers.BrowserProvider(ethereum);
-
-      const networkOk = await isCorrectNetwork(browserProvider);
-
-      if (!networkOk) {
-
-        throw new Error(
-
-          `Wrong network. Please switch to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
-
-        );
-
-      }
-
-      const signer = await browserProvider.getSigner();
-
-      const signerAddress = await signer.getAddress();
-
-      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
-
-        throw new Error(
-
-          "Connected wallet changed. Please reconnect the correct wallet and try again."
-
-        );
-
-      }
-
-      const usdt = getMocusdtWriteContract(signer);
-
-      const orbi = getOrbiWorldWriteContract(signer);
-
-      const allowance = toBigInt(
-
-        await usdt.allowance(signerAddress, ORBI_WORLD_SPENDER_ADDRESS)
-
-      );
-
-      if (allowance < amount) {
-
-        setStakeStep("approving");
-
-        setStakeMessage("Approve MOCUSDT spending in your wallet...");
-
-        const approvalTx = await usdt.approve(
-
-          ORBI_WORLD_SPENDER_ADDRESS,
-
-          amount
-
-        );
-
-        setStakeTxHash(approvalTx.hash);
-
-        await approvalTx.wait();
-
-      }
-
-      setStakeStep("staking");
-
-      setStakeMessage(
-
-        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
-
-          ? "Submitting top-up transaction..."
-
-          : "Submitting activation transaction..."
-
-      );
-
-      const tx =
-
-        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
-
-          ? await orbi.topUp(amount)
-
-          : await orbi.activateAccount(amount);
-
-      setStakeTxHash(tx.hash);
-
-      await tx.wait();
-
-      setStakeMessage("Transaction confirmed. Refreshing on-chain data...");
-
-      await loadDashboard(wallet);
-
-      setStakeBusy(false);
-
-      setStakeStep("idle");
-
-      setStakeModalOpen(false);
-
-      setStakeMessage("");
-
-      setStakeTxHash("");
-
-    } catch (err) {
-
-      console.error(err);
-
-      setStakeBusy(false);
-
-      setStakeStep("idle");
-
-      setStakeMessage(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Stake transaction failed. Please try again."
-
-      );
-
-    }
-
-  }, [loadDashboard, minimumStake, stakeAmount, dashboard.user.status, wallet]);
-
-  const refresh = useCallback(async () => {
-
-    if (!wallet) return;
-
-    await loadDashboard(wallet);
-
-  }, [loadDashboard, wallet]);
-
-  useEffect(() => {
-
-    const saved = window.localStorage.getItem("orbi.dashboard.wallet");
-
-    if (saved && ethers.isAddress(saved)) {
-
-      setWallet(saved);
-
-      loadDashboard(saved);
-
-    }
-
-  }, [loadDashboard]);
-
-  useEffect(() => {
-
-    if (wallet) {
-
-      window.localStorage.setItem("orbi.dashboard.wallet", wallet);
-
-    }
-
-  }, [wallet]);
-
-  useEffect(() => {
-
-    if (!provider?.on) return;
-
-    const handleAccounts = (accounts: unknown) => {
-
-      const next = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
-
-      if (!next) {
-
-        setWallet("");
-
-        setDashboard(EMPTY_DASHBOARD);
-
-        setPackages([]);
-
-        return;
-
-      }
-
-      setWallet(next);
-
-      loadDashboard(next);
-
-    };
-
-    const handleChain = () => {
-
-      if (wallet) loadDashboard(wallet);
-
-    };
-
-    provider.on("accountsChanged", handleAccounts);
-
-    provider.on("chainChanged", handleChain);
-
-    return () => {
-
-      provider.removeListener?.("accountsChanged", handleAccounts);
-
-      provider.removeListener?.("chainChanged", handleChain);
-
-    };
-
-  }, [provider, wallet, loadDashboard]);
-
-  const loadMyTeam = useCallback(async (userId: bigint, currentWallet: string) => {
-
-    if (!currentWallet || userId === 0n) {
-
-      setTeamMembers([]);
-
-      setTeamIndirectCount(0n);
-
-      setTeamLoadedFor("");
-
-      return;
-
-    }
-
-    try {
-
-      setTeamLoading(true);
-
-      setTeamError("");
-
-      const contract = getOrbiWorldReadContract();
-
-      const directUsersRaw = await contract.getDirectUsers(userId);
-
-      const directUsers = Array.isArray(directUsersRaw)
-
-        ? directUsersRaw.map(normalizeUser)
-
-        : [];
-
-      const members: TeamMember[] = directUsers.map((member) => ({
-
-        ...member,
-
-        teamDepth: 1,
-
-        activityLabel:
-
-          member.status === BigInt(USER_STATUS.ACTIVE)
-
-            ? "Active"
-
-            : member.status === BigInt(USER_STATUS.BLACKLISTED)
-
-              ? "Blacklisted"
-
-              : member.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
-
-                ? "Emergency Exit"
-
-                : "Inactive",
-
-      }));
-
-      // Count every descendant below the direct level. IDs are read from the
-
-      // contract and deduplicated so a member is counted only once.
-
-      const visited = new Set<string>([userId.toString()]);
-
-      const directIds = members.map((member) => member.id);
-
-      directIds.forEach((id) => visited.add(id.toString()));
-
-      let frontier = directIds;
-
-      let indirectCount = 0n;
-
-      let safetyRounds = 0;
-
-      while (frontier.length > 0 && safetyRounds < 100) {
-
-        safetyRounds += 1;
-
-        const nextIds: bigint[] = [];
-
-        for (let start = 0; start < frontier.length; start += 10) {
-
-          const batch = frontier.slice(start, start + 10);
-
-          const children = await Promise.all(
-
-            batch.map(async (parentId) => {
-
-              try {
-
-                const ids = await contract.getDirectReferrals(parentId);
-
-                return Array.isArray(ids) ? ids.map(toBigInt) : [];
-
-              } catch {
-
-                return [];
-
-              }
-
-            })
-
-          );
-
-          for (const ids of children) {
-
-            for (const childId of ids) {
-
-              const key = childId.toString();
-
-              if (childId === 0n || visited.has(key)) continue;
-
-              visited.add(key);
-
-              indirectCount += 1n;
-
-              nextIds.push(childId);
-
-            }
-
-          }
-
-        }
-
-        frontier = nextIds;
-
-      }
-
-      setTeamIndirectCount(indirectCount);
-
-      setTeamMembers(members);
-
-      setTeamLoadedFor(currentWallet.toLowerCase());
-
-    } catch (err) {
-
-      console.error("My Team load failed:", err);
-
-      setTeamMembers([]);
-
-      setTeamIndirectCount(0n);
-
-      setTeamError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load your direct team members."
-
-      );
-
-    } finally {
-
-      setTeamLoading(false);
-
-    }
-
-  }, []);
-
-  useEffect(() => {
-
-    if (activeNav === "My Team" && wallet && dashboard.user.id > 0n) {
-
-      const normalizedWallet = wallet.toLowerCase();
-
-      if (teamLoadedFor !== normalizedWallet) {
-
-        loadMyTeam(dashboard.user.id, wallet);
-
-      }
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
-
-  // Referral Center reuses the existing direct-team loader, then reads the
-
-  // contract's exact direct-leg business values without changing My Team.
-
-  useEffect(() => {
-
-    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n) {
-
-      const normalizedWallet = wallet.toLowerCase();
-
-      if (teamLoadedFor !== normalizedWallet) {
-
-        loadMyTeam(dashboard.user.id, wallet);
-
-      }
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
-
-  const loadReferralBusiness = useCallback(async (userId: bigint, members: TeamMember[]) => {
-
-    if (userId === 0n || members.length === 0) {
-
-      setReferralLegBusiness({});
-
-      setReferralBusinessError("");
-
-      return;
-
-    }
-
-    try {
-
-      setReferralBusinessLoading(true);
-
-      setReferralBusinessError("");
-
-      const contract = getOrbiWorldReadContract();
-
-      const entries = await Promise.all(
-
-        members.map(async (member) => {
-
-          try {
-
-            const value = await contract.getDirectLegBusiness(userId, member.id);
-
-            return [member.id.toString(), toBigInt(value)] as const;
-
-          } catch {
-
-            return [member.id.toString(), 0n] as const;
-
-          }
-
-        })
-
-      );
-
-      setReferralLegBusiness(Object.fromEntries(entries));
-
-    } catch (err) {
-
-      console.error("Referral business load failed:", err);
-
-      setReferralLegBusiness({});
-
-      setReferralBusinessError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load direct referral business from the blockchain."
-
-      );
-
-    } finally {
-
-      setReferralBusinessLoading(false);
-
-    }
-
-  }, []);
-
-  useEffect(() => {
-
-    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n && !teamLoading) {
-
-      loadReferralBusiness(dashboard.user.id, teamMembers);
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, teamMembers, teamLoading, loadReferralBusiness]);
-
-  const loadLevelIncome = useCallback(async (userId: bigint) => {
-
-    if (userId === 0n) {
-
-      setLevelIncomeBps(Array(10).fill(0n));
-
-      setLevelIncomeEnabled(false);
-
-      setLevelIncomeHistory([]);
-
-      setLevelIncomeError("");
-
-      return;
-
-    }
-
-    try {
-
-      setLevelIncomeLoading(true);
-
-      setLevelIncomeError("");
-
-      const rpc = new ethers.JsonRpcProvider(
-
-        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
-
-      );
-
-      const levelContract = new ethers.Contract(
-
-        ORBI_WORLD_SPENDER_ADDRESS,
-
-        LEVEL_INCOME_READ_ABI,
-
-        rpc
-
-      );
-
-      const config = await levelContract.getLevelIncomeConfig();
-
-      const rawBps = Array.from(
-
-        config?.incomeBps ?? config?.[0] ?? []
-
-      ).map(toBigInt);
-
-      setLevelIncomeBps(
-
-        rawBps.length === 10 ? rawBps : Array(10).fill(0n)
-
-      );
-
-      setLevelIncomeEnabled(
-
-        Boolean(config?.enabled ?? config?.[1])
-
-      );
-
-      // Public BSC RPC endpoints can reject large eth_getLogs ranges.
-
-      // Query from newest to oldest in 10,000-block chunks, stop once we have
-
-      // the latest 50 payouts, and keep a failed chunk from breaking config.
-
-      const filter = levelContract.filters.LevelIncomePaid(null, userId, null);
-
-      const latestBlock = await rpc.getBlockNumber();
-
-      const earliestBlock = Math.max(0, latestBlock - 500_000);
-
-      const chunkSize = 10_000;
-
-      const logs: any[] = [];
-
-      for (let end = latestBlock; end >= earliestBlock; end -= chunkSize) {
-
-        const start = Math.max(earliestBlock, end - chunkSize + 1);
-
-        try {
-
-          const chunk = await levelContract.queryFilter(filter, start, end);
-
-          logs.push(...chunk);
-
-          if (logs.length >= 50) break;
-
-        } catch (chunkError) {
-
-          console.warn(`Level Income query failed for ${start}-${end}:`, chunkError);
-
-        }
-
-      }
-
-      const recentLogs = logs
-
-        .sort((a: any, b: any) => {
-
-          const blockDiff = Number(b.blockNumber ?? 0) - Number(a.blockNumber ?? 0);
-
-          if (blockDiff !== 0) return blockDiff;
-
-          return Number(b.index ?? 0) - Number(a.index ?? 0);
-
-        })
-
-        .slice(0, 50);
-
-      const entries: LevelIncomeEntry[] = await Promise.all(
-
-        recentLogs.map(async (log: any) => {
-
-          const args = log.args;
-
-          let timestamp = 0;
-
-          try {
-
-            const block = await rpc.getBlock(log.blockNumber);
-
-            timestamp = block?.timestamp ?? 0;
-
-          } catch {
-
-            timestamp = 0;
-
-          }
-
-          return {
-
-            fromUserId: toBigInt(args?.fromUserId ?? args?.[0]),
-
-            toUserId: toBigInt(args?.toUserId ?? args?.[1]),
-
-            level: toBigInt(args?.level ?? args?.[2]),
-
-            amount: toBigInt(args?.amount ?? args?.[3]),
-
-            blockNumber: Number(log.blockNumber ?? 0),
-
-            timestamp,
-
-          };
-
-        })
-
-      );
-
-      setLevelIncomeHistory(entries);
-
-    } catch (err) {
-
-      console.error("Level Income load failed:", err);
-
-      setLevelIncomeHistory([]);
-
-      setLevelIncomeError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load Level Income configuration/history from the blockchain."
-
-      );
-
-    } finally {
-
-      setLevelIncomeLoading(false);
-
-    }
-
-  }, []);
-
-  useEffect(() => {
-
-    if (activeNav === "Level Income" && wallet && dashboard.user.id > 0n) {
-
-      loadLevelIncome(dashboard.user.id);
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, loadLevelIncome]);
-
-  const loadRankRewards = useCallback(async () => {
-
-    if (!wallet || dashboard.user.id === 0n) {
-
-      setRankRequirements([]);
-
-      setRankRewardEnabled(false);
-
-      setRankError("");
-
-      return;
-
-    }
-
-    try {
-
-      setRankLoading(true);
-
-      setRankError("");
-
-      const rpc = new ethers.JsonRpcProvider(
-
-        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
-
-      );
-
-      const rankContract = new ethers.Contract(
-
-        ORBI_WORLD_SPENDER_ADDRESS,
-
-        [
-
-          "function s_rankConfig() view returns (bool rankRewardEnabled)",
-
-          "function MAX_RANK_LEVEL() view returns (uint8)",
-
-        ],
-
-        rpc
-
-      );
-
-      const [config, maxRankRaw] = await Promise.all([
-
-        rankContract.s_rankConfig(),
-
-        rankContract.MAX_RANK_LEVEL(),
-
-      ]);
-
-      setRankRewardEnabled(Boolean(config?.rankRewardEnabled ?? config?.[0]));
-
-      const maxRank = Math.min(20, Math.max(0, Number(toBigInt(maxRankRaw))));
-
-      const requirements: RankRequirementData[] = [];
-
-      // s_rankConfig is a public struct getter, but Solidity does not expose
-
-      // the nested fixed array through that getter. Read the three uint256
-
-      // storage slots for each RankRequirement directly from the deployed
-
-      // contract. This keeps the UI sourced from the actual on-chain values
-
-      // instead of duplicating rank requirements in frontend code.
-
-      for (let index = 0; index < maxRank; index += 1) {
-
-        const baseSlot =
-
-          RANK_CONFIG_BASE_SLOT +
-
-          BigInt(index) *
-
-            RANK_REQUIREMENT_SLOT_WIDTH;
-
-        const [powerRaw, otherRaw, rewardRaw] = await Promise.all([
-
-          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot),
-
-          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 1n),
-
-          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 2n),
-
-        ]);
-
-        requirements.push({
-
-          requiredPowerLeg: BigInt(powerRaw),
-
-          requiredOtherLeg: BigInt(otherRaw),
-
-          reward: BigInt(rewardRaw),
-
-        });
-
-      }
-
-      setRankRequirements(requirements);
-
-    } catch (err) {
-
-      console.error("Rank & Rewards load failed:", err);
-
-      setRankRequirements([]);
-
-      setRankRewardEnabled(false);
-
-      setRankError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load Rank & Rewards configuration from the blockchain."
-
-      );
-
-    } finally {
-
-      setRankLoading(false);
-
-    }
-
-  }, [wallet, dashboard.user.id]);
-
-  useEffect(() => {
-
-    if (activeNav === "Rank & Rewards" && wallet && dashboard.user.id > 0n) {
-
-      loadRankRewards();
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, loadRankRewards]);
-
-const loadWithdrawals = useCallback(async (userId: bigint) => {
-
-    if (!wallet || userId === 0n) {
-
-      setWithdrawalHistory([]);
-
-      setWithdrawalError("");
-
-      return;
-
-    }
-
-    try {
-
-      setWithdrawalLoading(true);
-
-      setWithdrawalError("");
-
-      const rpc = new ethers.JsonRpcProvider(
-
-        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
-
-      );
-
-      const contractAddress = ORBI_WORLD_SPENDER_ADDRESS;
-
-      const readContract = new ethers.Contract(
-
-        contractAddress,
-
-        [
-
-          "function s_withdrawalConfig() view returns (uint256 minimumWithdrawal,uint16 withdrawalFeeBps)",
-
-          "function s_featureConfig() view returns (bool registrationEnabled,bool stakingEnabled,bool withdrawalEnabled,bool capitalWithdrawalEnabled)",
-
-        ],
-
-        rpc
-
-      );
-
-      const [withdrawConfig, featureConfig] = await Promise.all([
-
-        readContract.s_withdrawalConfig(),
-
-        readContract.s_featureConfig(),
-
-      ]);
-
-      const minimum = toBigInt(
-
-        withdrawConfig?.minimumWithdrawal ?? withdrawConfig?.[0]
-
-      );
-
-      const feeBps = toBigInt(
-
-        withdrawConfig?.withdrawalFeeBps ?? withdrawConfig?.[1]
-
-      );
-
-      const enabled = Boolean(
-
-        featureConfig?.withdrawalEnabled ?? featureConfig?.[2]
-
-      );
-
-      setWithdrawalMinimum(minimum);
-
-      setWithdrawalFeeBps(feeBps);
-
-      setWithdrawalEnabled(enabled);
-
-      // One bounded log stream is used for all three withdrawal events.
-
-      // We filter by the current user after decoding, which avoids firing
-
-      // three separate eth_getLogs queries for the same block range.
-
-      const requestedTopic = ethers.id(
-
-        "WithdrawalRequested(uint256,uint256,uint8,uint256,uint256,uint256)"
-
-      );
-
-      const approvedTopic = ethers.id(
-
-        "WithdrawalApproved(uint256,uint256,uint256)"
-
-      );
-
-      const rejectedTopic = ethers.id(
-
-        "WithdrawRejected(uint256,uint256)"
-
-      );
-
-      const withdrawalInterface = new ethers.Interface([
-
-        "event WithdrawalRequested(uint256 indexed requestId,uint256 indexed userId,uint8 walletType,uint256 amount,uint256 fee,uint256 netAmount)",
-
-        "event WithdrawalApproved(uint256 indexed requestId,uint256 indexed userId,uint256 amount)",
-
-        "event WithdrawRejected(uint256 indexed requestId,uint256 indexed userId)",
-
-      ]);
-
-      const latestBlock = await rpc.getBlockNumber();
-
-      const fromBlock = Math.max(0, latestBlock - 100_000);
-
-      const chunkSize = 5_000;
-
-      const logs: any[] = [];
-
-      for (let start = fromBlock; start <= latestBlock; start += chunkSize) {
-
-        const end = Math.min(latestBlock, start + chunkSize - 1);
-
-        try {
-
-          const chunk = await rpc.getLogs({
-
-            address: contractAddress,
-
-            fromBlock: start,
-
-            toBlock: end,
-
-            topics: [[requestedTopic, approvedTopic, rejectedTopic]],
-
-          });
-
-          logs.push(...chunk);
-
-        } catch (chunkError) {
-
-          console.warn(`Withdrawal history query failed for ${start}-${end}:`, chunkError);
-
-        }
-
-      }
-
-      const rows = new Map<string, WithdrawalHistoryRow>();
-
-      const currentUserId = userId.toString();
-
-      for (const log of logs) {
-
-        try {
-
-          const parsed = withdrawalInterface.parseLog(log);
-
-          if (!parsed) continue;
-
-          if (parsed.name === "WithdrawalRequested") {
-
-            const eventUserId = toBigInt(parsed.args?.userId ?? parsed.args?.[1]);
-
-            if (eventUserId.toString() !== currentUserId) continue;
-
-            const requestId = toBigInt(parsed.args?.requestId ?? parsed.args?.[0]);
-
-            rows.set(requestId.toString(), {
-
-              requestId,
-
-              userId: eventUserId,
-
-              walletType: Number(toBigInt(parsed.args?.walletType ?? parsed.args?.[2])),
-
-              amount: toBigInt(parsed.args?.amount ?? parsed.args?.[3]),
-
-              fee: toBigInt(parsed.args?.fee ?? parsed.args?.[4]),
-
-              netAmount: toBigInt(parsed.args?.netAmount ?? parsed.args?.[5]),
-
-              status: "PENDING",
-
-              blockNumber: Number(log.blockNumber ?? 0),
-
-              timestamp: 0,
-
-            });
-
-          } else {
-
-            const eventUserId = toBigInt(parsed.args?.userId ?? parsed.args?.[1]);
-
-            if (eventUserId.toString() !== currentUserId) continue;
-
-            const requestId = toBigInt(parsed.args?.requestId ?? parsed.args?.[0]);
-
-            const existing = rows.get(requestId.toString());
-
-            if (!existing) continue;
-
-            existing.status = parsed.name === "WithdrawalApproved" ? "APPROVED" : "REJECTED";
-
-          }
-
-        } catch (decodeError) {
-
-          console.warn("Withdrawal event decode failed:", decodeError);
-
-        }
-
-      }
-
-      const sorted = Array.from(rows.values())
-
-        .sort((a, b) => b.blockNumber - a.blockNumber)
-
-        .slice(0, 25);
-
-      const withTimestamps = await Promise.all(
-
-        sorted.map(async (row) => {
-
-          try {
-
-            const block = await rpc.getBlock(row.blockNumber);
-
-            return { ...row, timestamp: block?.timestamp ?? 0 };
-
-          } catch {
-
-            return row;
-
-          }
-
-        })
-
-      );
-
-      setWithdrawalHistory(withTimestamps);
-
-    } catch (err) {
-
-      console.error("Withdrawal load failed:", err);
-
-      setWithdrawalHistory([]);
-
-      setWithdrawalError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to load withdrawal configuration/history from the blockchain."
-
-      );
-
-    } finally {
-
-      setWithdrawalLoading(false);
-
-    }
-
-  }, [wallet]);
-
-  useEffect(() => {
-
-    if (activeNav === "Withdraw" && wallet && dashboard.user.id > 0n) {
-
-      loadWithdrawals(dashboard.user.id);
-
-    }
-
-  }, [activeNav, wallet, dashboard.user.id, loadWithdrawals]);
-
-  const user = dashboard.user;
-
-  const requestWithdrawal = useCallback(async () => {
-
-    if (!wallet) {
-
-      setWithdrawalMessage("Connect your wallet before requesting a withdrawal.");
-
-      return;
-
-    }
-
-    let amount: bigint;
-
-    try {
-
-      amount = parseUSDT(withdrawAmount.trim());
-
-    } catch {
-
-      setWithdrawalMessage("Enter a valid USDT amount.");
-
-      return;
-
-    }
-
-    if (amount <= 0n) {
-
-      setWithdrawalMessage("Amount must be greater than zero.");
-
-      return;
-
-    }
-
-    if (amount < withdrawalMinimum) {
-
-      setWithdrawalMessage(
-
-        `Minimum withdrawal is $${formatUsdt(withdrawalMinimum)} USDT.`
-
-      );
-
-      return;
-
-    }
-
-    const available =
-
-      withdrawWallet === 0
-
-        ? user.earningWallet
-
-        : withdrawWallet === 1
-
-          ? user.rankWallet
-
-          : user.royaltyWallet;
-
-    if (amount > available) {
-
-      setWithdrawalMessage("Insufficient balance in the selected wallet.");
-
-      return;
-
-    }
-
-    if (!withdrawalEnabled) {
-
-      setWithdrawalMessage("Withdrawals are currently disabled by the smart contract.");
-
-      return;
-
-    }
-
-    if (withdrawalHistory.some((row) => row.status === "PENDING")) {
-
-      setWithdrawalMessage("You already have a pending withdrawal request.");
-
-      return;
-
-    }
-
-    try {
-
-      setWithdrawalBusy(true);
-
-      setWithdrawalMessage("");
-
-      setWithdrawalTxHash("");
-
-      const ethereum = (window as Window & {
-
-        ethereum?: WalletProvider;
-
-      }).ethereum;
-
-      if (!ethereum) throw new Error("No compatible wallet detected.");
-
-      const browserProvider = new ethers.BrowserProvider(ethereum);
-
-      if (!(await isCorrectNetwork(browserProvider))) {
-
-        throw new Error(
-
-          `Wrong network. Please switch to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
-
-        );
-
-      }
-
-      const signer = await browserProvider.getSigner();
-
-      const signerAddress = await signer.getAddress();
-
-      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
-
-        throw new Error("Connected wallet changed. Please reconnect and try again.");
-
-      }
-
-      const contract = new ethers.Contract(
-
-        ORBI_WORLD_SPENDER_ADDRESS,
-
-        [
-
-          "function requestWithdraw(uint8 walletType,uint256 amount)",
-
-        ],
-
-        signer
-
-      );
-
-      const tx = await contract.requestWithdraw(withdrawWallet, amount);
-
-      setWithdrawalTxHash(tx.hash);
-
-      setWithdrawalMessage("Withdrawal request submitted. Waiting for confirmation...");
-
-      await tx.wait();
-
-      setWithdrawAmount("");
-
-      setWithdrawalMessage(
-
-        "Withdrawal request created successfully. It is now pending admin review."
-
-      );
-
-      await loadDashboard(wallet);
-
-      await loadWithdrawals(user.id);
-
-    } catch (err) {
-
-      console.error("Withdrawal request failed:", err);
-
-      setWithdrawalMessage(
-
-        err instanceof Error ? err.message : "Withdrawal request failed."
-
-      );
-
-    } finally {
-
-      setWithdrawalBusy(false);
-
-    }
-
-  }, [
-
-    wallet,
-
-    withdrawAmount,
-
-    withdrawalMinimum,
-
-    withdrawWallet,
-
-    user.earningWallet,
-
-    user.rankWallet,
-
-    user.royaltyWallet,
-
-    withdrawalEnabled,
-
-    withdrawalHistory,
-
-    loadDashboard,
-
-    loadWithdrawals,
-
-    user.id,
-
-  ]);
-
-  const withdrawalFeePreview = (() => {
-
-    if (!withdrawAmount.trim()) return 0n;
-
-    try {
-
-      const amount = parseUSDT(withdrawAmount.trim());
-
-      return (amount * withdrawalFeeBps) / 10000n;
-
-    } catch {
-
-      return 0n;
-
-    }
-
-  })();
-
-  const withdrawalNetPreview = (() => {
-
-    if (!withdrawAmount.trim()) return 0n;
-
-    try {
-
-      const amount = parseUSDT(withdrawAmount.trim());
-
-      const fee = (amount * withdrawalFeeBps) / 10000n;
-
-      return amount > fee ? amount - fee : 0n;
-
-    } catch {
-
-      return 0n;
-
-    }
-
-  })();
-
-  const activePackages = useMemo(
-
-    () =>
-
-      packages.filter(
-
-        (item) =>
-
-          dashboard.activePackageIds.some(
-
-            (id) => id.toString() === item.packageId.toString()
-
-          ) && item.status === BigInt(PACKAGE_STATUS.ACTIVE)
-
-      ),
-
-    [dashboard.activePackageIds, packages]
-
-  );
-
-  const totalStaked = packages.reduce(
-
-    (sum, item) => sum + item.amount,
-
-    0n
-
-  );
-
-  const totalPackagePaid = packages.reduce(
-
-    (sum, item) => sum + item.totalPaid,
-
-    0n
-
-  );
-
-  const totalEarnings =
-
-    user.totalROIIncome +
-
-    user.totalLevelIncome +
-
-    user.totalRankIncome +
-
-    user.totalRoyaltyIncome;
-
-  const referralLink =
-
-    typeof window !== "undefined" && wallet
-
-      ? `${window.location.origin}/?ref=${wallet}`
-
-      : "";
-
-  const copyReferral = async () => {
-
-    if (!referralLink) return;
-
-    try {
-
-      await navigator.clipboard.writeText(referralLink);
-
-      setCopied(true);
-
-      window.setTimeout(() => setCopied(false), 1800);
-
-    } catch {
-
-      setError("Unable to copy referral link.");
-
-    }
-
-  };
-
-  const emergencyEligiblePackages = activePackages.filter((item) => {
-
-    const threshold = (item.amount * 70n) / 100n;
-
-    return item.totalPaid < threshold;
-
-  });
-
-  // Emergency return preview mirrors the deployed contract's 70% rule.
-
-  const emergencyReturn = emergencyEligiblePackages.reduce((sum, item) => {
-
-    const threshold = (item.amount * 70n) / 100n;
-
-    return sum + (threshold - item.totalPaid);
-
-  }, 0n);
-
-  const loadEmergencyConfig = useCallback(async () => {
-
-    if (!wallet) {
-
-      setEmergencyEnabled(false);
-
-      setEmergencyMessage("");
-
-      return;
-
-    }
-
-    try {
-
-      setEmergencyLoading(true);
-
-      setEmergencyMessage("");
-
-      // Read the live feature flag from the same deployed ORBI WORLD contract
-
-      // already used by the rest of this dashboard. No hardcoded enable/disable state.
-
-      const readContract = getOrbiWorldReadContract();
-
-      const featureConfig = await readContract.s_featureConfig();
-
-      const enabled = Boolean(
-
-        featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
-
-      );
-
-      setEmergencyEnabled(enabled);
-
-    } catch (err) {
-
-      console.error("Emergency Exit config load failed:", err);
-
-      setEmergencyEnabled(false);
-
-      setEmergencyMessage(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to read Emergency Exit status from the blockchain."
-
-      );
-
-    } finally {
-
-      setEmergencyLoading(false);
-
-    }
-
-  }, [wallet]);
-
-  useEffect(() => {
-
-    if (activeNav === "Emergency Exit" && wallet) {
-
-      loadEmergencyConfig();
-
-    }
-
-  }, [activeNav, wallet, loadEmergencyConfig]);
-
-  const emergencyCapitalWithdraw = useCallback(async () => {
-
-    if (!wallet) {
-
-      setEmergencyMessage("Connect your wallet before using Emergency Exit.");
-
-      return;
-
-    }
-
-    if (user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)) {
-
-      setEmergencyMessage("Your account is already in Emergency Exit status.");
-
-      return;
-
-    }
-
-    if (!emergencyEnabled) {
-
-      setEmergencyMessage(
-
-        "Emergency Capital Withdrawal is currently disabled by the smart contract."
-
-      );
-
-      return;
-
-    }
-
-    if (emergencyEligiblePackages.length === 0 || emergencyReturn <= 0n) {
-
-      setEmergencyMessage(
-
-        "You are not currently eligible for Emergency Capital Withdrawal."
-
-      );
-
-      return;
-
-    }
-
-    try {
-
-      setEmergencyBusy(true);
-
-      setEmergencyMessage("");
-
-      setEmergencyTxHash("");
-
-      const ethereum = (window as Window & {
-
-        ethereum?: WalletProvider;
-
-      }).ethereum;
-
-      if (!ethereum) {
-
-        throw new Error("No compatible wallet detected.");
-
-      }
-
-      const browserProvider = new ethers.BrowserProvider(ethereum);
-
-      if (!(await isCorrectNetwork(browserProvider))) {
-
-        throw new Error(
-
-          `Wrong network. Please switch your wallet to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
-
-        );
-
-      }
-
-      const signer = await browserProvider.getSigner();
-
-      const signerAddress = await signer.getAddress();
-
-      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
-
-        throw new Error(
-
-          "Connected wallet changed. Please reconnect the correct wallet and try again."
-
-        );
-
-      }
-
-      const contract = getOrbiWorldWriteContract(signer);
-
-      // Preflight the exact on-chain operation before opening the wallet
-
-      // confirmation. This prevents avoidable signature prompts when the
-
-      // contract has become ineligible, paused, or otherwise unable to execute.
-
-      await contract.emergencyCapitalWithdraw.staticCall();
-
-      const tx = await contract.emergencyCapitalWithdraw();
-
-      setEmergencyTxHash(tx.hash);
-
-      setEmergencyMessage(
-
-        "Emergency Exit submitted. Waiting for blockchain confirmation..."
-
-      );
-
-      await tx.wait();
-
-      setEmergencyConfirmOpen(false);
-
-      setEmergencyMessage(
-
-        "Emergency Capital Withdrawal completed successfully. Refreshing on-chain data..."
-
-      );
-
-      // Refresh the same source-of-truth data used by My Packages/Dashboard.
-
-      await loadDashboard(wallet);
-
-      await loadEmergencyConfig();
-
-    } catch (err) {
-
-      console.error("Emergency Capital Withdrawal failed:", err);
-
-      setEmergencyMessage(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Emergency Capital Withdrawal failed. Please try again."
-
-      );
-
-    } finally {
-
-      setEmergencyBusy(false);
-
-    }
-
-  }, [
-
-    emergencyEnabled,
-
-    emergencyEligiblePackages.length,
-
-    emergencyReturn,
-
-    loadDashboard,
-
-    loadEmergencyConfig,
-
-    user.status,
-
-    wallet,
-
-  ]);
-
-
-  const loadSettings = useCallback(async () => {
-
-    if (!wallet) {
-
-      setSettingsLoading(false);
-
-      setSettingsError("");
-
-      setContractPaused(false);
-
-      setSettingsFeatures({
-
-        registrationEnabled: false,
-
-        stakingEnabled: false,
-
-        withdrawalEnabled: false,
-
-        capitalWithdrawalEnabled: false,
-
-      });
-
-      return;
-
-    }
-
-    try {
-
-      setSettingsLoading(true);
-
-      setSettingsError("");
-
-      const readContract = getOrbiWorldReadContract();
-
-      const featureConfig = await readContract.s_featureConfig();
-
-      // The deployed frontend ABI does not expose paused(); keep this
-
-      // status neutral instead of calling a missing contract method.
-
-      setContractPaused(false);
-
-      setSettingsFeatures({
-
-        registrationEnabled: Boolean(
-
-          featureConfig?.registrationEnabled ?? featureConfig?.[0]
-
-        ),
-
-        stakingEnabled: Boolean(
-
-          featureConfig?.stakingEnabled ?? featureConfig?.[1]
-
-        ),
-
-        withdrawalEnabled: Boolean(
-
-          featureConfig?.withdrawalEnabled ?? featureConfig?.[2]
-
-        ),
-
-        capitalWithdrawalEnabled: Boolean(
-
-          featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
-
-        ),
-
-      });
-
-    } catch (err) {
-
-      console.error("Settings load failed:", err);
-
-      setSettingsError(
-
-        err instanceof Error
-
-          ? err.message
-
-          : "Unable to read account settings from the blockchain."
-
-      );
-
-    } finally {
-
-      setSettingsLoading(false);
-
-    }
-
-  }, [wallet]);
-
-  useEffect(() => {
-
-    if (activeNav === "Settings" && wallet) {
-
-      loadSettings();
-
-    }
-
-  }, [activeNav, wallet, loadSettings]);
-
-  const copySettingsWallet = useCallback(async () => {
-
-    if (!wallet) return;
-
-    try {
-
-      await navigator.clipboard.writeText(wallet);
-
-      setSettingsCopied(true);
-
-      window.setTimeout(() => setSettingsCopied(false), 1800);
-
-    } catch {
-
-      setSettingsError("Unable to copy wallet address.");
-
-    }
-
-  }, [wallet]);
-
-  const disconnectWallet = useCallback(() => {
-
-    if (typeof window !== "undefined") {
-
-      window.localStorage.removeItem("orbi.dashboard.wallet");
-
-    }
-
-    setWallet("");
-
-    setProvider(null);
-
-    setDashboard(EMPTY_DASHBOARD);
-
-    setPackages([]);
-
-    setUsdtBalance(0n);
-
-    setNativeBalance(0n);
-
-    setSettingsError("");
-
-    setSettingsCopied(false);
-
-    setActiveNav("Dashboard");
-
-    setMobileOpen(false);
-
-  }, []);
-
-  const renderMain = () => {
-
-    if (activeNav === "My Packages") {
-
-      const activeCount = activePackages.length;
-
-      const closedCount = packages.filter(
-
-        (item) => item.status === BigInt(PACKAGE_STATUS.CLOSED)
-
-      ).length;
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN PACKAGES
-
-              </div>
-
-              <h1>My Packages<span>.</span></h1>
-
-            </div>
-
-            <div className="orbi-package-actions">
-
-              <button
-
-                className="orbi-stake-btn"
-
-                onClick={openStakeModal}
-
-                disabled={!wallet || loading}
-
-              >
-
-                <Icon name="package" size={18} />
-
-                {user.status === BigInt(USER_STATUS.ACTIVE)
-
-                  ? "Top Up Package"
-
-                  : "Stake Package"}
-
-              </button>
-
-              <button
-
-                className="orbi-refresh-btn"
-
-                onClick={refresh}
-
-                disabled={loading}
-
-              >
-
-                <Icon name="refresh" size={17} />
-
-                {loading ? "Refreshing..." : "Refresh"}
-
-              </button>
-
-            </div>
-
-          </section>
-
-          {networkError && (
-
-            <div className="orbi-alert orbi-alert-warning">
-
-              <Icon name="alert" size={18} />
-
-              <span>{networkError}</span>
-
-            </div>
-
-          )}
-
-          {error && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{error}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section className="orbi-package-overview-grid">
-
-                <div>
-
-                  <span>TOTAL PACKAGES</span>
-
-                  <strong>{packages.length}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ACTIVE PACKAGES</span>
-
-                  <strong>{activeCount}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>CLOSED PACKAGES</span>
-
-                  <strong>{closedCount}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TOTAL STAKED</span>
-
-                  <strong>${formatUsdt(totalStaked)}</strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section orbi-packages-page">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">PACKAGE PORTFOLIO</span>
-
-                    <h2>Your on-chain packages</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>TOTAL PAID</span>
-
-                    <strong>${formatUsdt(totalPackagePaid)}</strong>
-
-                  </div>
-
-                </div>
-
-                {loading && packages.length === 0 ? (
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="refresh" size={24} />
-
-                    <span>Loading packages from blockchain...</span>
-
-                  </div>
-
-                ) : packages.length === 0 ? (
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="package" size={24} />
-
-                    <span>No packages found for this wallet.</span>
-
-                  </div>
-
-                ) : (
-
-                  <div className="orbi-package-grid orbi-package-grid-page">
-
-                    {packages.map((item) => {
-
-                      const threshold = (item.amount * 70n) / 100n;
-
-                      const progress =
-
-                        item.maxPayout > 0n
-
-                          ? Math.min(
-
-                              100,
-
-                              Number(
-
-                                (item.totalPaid * 10000n) / item.maxPayout
-
-                              ) / 100
-
-                            )
-
-                          : 0;
-
-                      const emergencyEligible =
-
-                        item.status === BigInt(PACKAGE_STATUS.ACTIVE) &&
-
-                        !item.emergencyClosed &&
-
-                        item.totalPaid < threshold;
-
-                      return (
-
-                        <article
-
-                          className={`orbi-package-item orbi-package-page-item ${
-
-                            item.status === BigInt(PACKAGE_STATUS.ACTIVE)
-
-                              ? "is-active"
-
-                              : ""
-
-                          }`}
-
-                          key={item.packageId.toString()}
-
-                        >
-
-                          <div className="orbi-package-top">
-
-                            <div>
-
-                              <span>PACKAGE ID</span>
-
-                              <strong>#{item.packageId.toString()}</strong>
-
-                            </div>
-
-                            <span
-
-                              className={`orbi-package-status ${
-
-                                item.status === BigInt(PACKAGE_STATUS.ACTIVE)
-
-                                  ? "active"
-
-                                  : "closed"
-
-                              }`}
-
-                            >
-
-                              {packageStatusLabel(
-
-                                item.status,
-
-                                item.emergencyClosed
-
-                              )}
-
-                            </span>
-
-                          </div>
-
-                          <div className="orbi-package-amount">
-
-                            <span>STAKED AMOUNT</span>
-
-                            <strong>${formatUsdt(item.amount)}</strong>
-
-                          </div>
-
-                          <div className="orbi-package-detail-row">
-
-                            <div>
-
-                              <span>MAX PAYOUT</span>
-
-                              <b>${formatUsdt(item.maxPayout)}</b>
-
-                            </div>
-
-                            <div>
-
-                              <span>TOTAL PAID</span>
-
-                              <b>${formatUsdt(item.totalPaid)}</b>
-
-                            </div>
-
-                          </div>
-
-                          <div className="orbi-progress-wrap">
-
-                            <div className="orbi-progress-label">
-
-                              <span>2X PAYOUT PROGRESS</span>
-
-                              <b>{progress.toFixed(1)}%</b>
-
-                            </div>
-
-                            <div className="orbi-progress">
-
-                              <span style={{ width: `${progress}%` }} />
-
-                            </div>
-
-                            <div className="orbi-progress-values">
-
-                              <span>${formatUsdt(item.totalPaid)} paid</span>
-
-                              <span>${formatUsdt(item.maxPayout)} max</span>
-
-                            </div>
-
-                          </div>
-
-                          <div className="orbi-package-stats">
-
-                            <div>
-
-                              <span>ROI PAID</span>
-
-                              <b>${formatUsdt(item.roiPaid)}</b>
-
-                            </div>
-
-                            <div>
-
-                              <span>LEVEL PAID</span>
-
-                              <b>${formatUsdt(item.levelPaid)}</b>
-
-                            </div>
-
-                            <div>
-
-                              <span>STARTED</span>
-
-                              <b>{formatDate(item.startTime)}</b>
-
-                            </div>
-
-                          </div>
-
-                          <div className="orbi-package-meta-grid">
-
-                            <div>
-
-                              <span>CLOSED</span>
-
-                              <b>{formatDate(item.closedTime)}</b>
-
-                            </div>
-
-                            <div>
-
-                              <span>EMERGENCY CLOSED</span>
-
-                              <b>{item.emergencyClosed ? "YES" : "NO"}</b>
-
-                            </div>
-
-                          </div>
-
-                          <div
-
-                            className={`orbi-emergency-status ${
-
-                              emergencyEligible ? "eligible" : "locked"
-
-                            }`}
-
-                          >
-
-                            <div>
-
-                              <span>EMERGENCY EXIT ELIGIBILITY</span>
-
-                              <strong>
-
-                                {emergencyEligible ? "ELIGIBLE" : "LOCKED"}
-
-                              </strong>
-
-                            </div>
-
-                          </div>
-
-                        </article>
-
-                      );
-
-                    })}
-
-                  </div>
-
-                )}
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "My Team") {
-
-      const totalDirects = dashboard.user.directCount;
-
-      const activeDirects = dashboard.user.activeDirectCount;
-
-      const inactiveDirects =
-
-        totalDirects > activeDirects ? totalDirects - activeDirects : 0n;
-
-      const totalIndirects = teamIndirectCount;
-
-      const refreshTeam = async () => {
-
-        if (!wallet || dashboard.user.id === 0n) return;
-
-        setTeamLoadedFor("");
-
-        await loadMyTeam(dashboard.user.id, wallet);
-
-      };
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN TEAM
-
-              </div>
-
-              <h1>My Team<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={refreshTeam}
-
-              disabled={teamLoading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {teamLoading ? "Loading..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {networkError && (
-
-            <div className="orbi-alert orbi-alert-warning">
-
-              <Icon name="alert" size={18} />
-
-              <span>{networkError}</span>
-
-            </div>
-
-          )}
-
-          {teamError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{teamError}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section
-
-                className="orbi-package-overview-grid"
-
-                style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}
-
-              >
-
-                <div>
-
-                  <span>TOTAL DIRECTS</span>
-
-                  <strong>{totalDirects.toString()}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TOTAL INDIRECTS</span>
-
-                  <strong>{totalIndirects.toString()}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ACTIVE DIRECTS</span>
-
-                  <strong>{activeDirects.toString()}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>INACTIVE DIRECTS</span>
-
-                  <strong>{inactiveDirects.toString()}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TEAM BUSINESS</span>
-
-                  <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section" style={{ width: "100%" }}>
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">DIRECT MEMBERS</span>
-
-                    <h2>Your direct team</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>{teamMembers.length} direct members loaded</span>
-
-                  </div>
-
-                </div>
-
-                {teamLoading ? (
-
-                  <div className="orbi-empty-state">
-
-                    <div className="orbi-empty-icon">
-
-                      <Icon name="refresh" size={24} />
-
-                    </div>
-
-                    <h3>Loading your team...</h3>
-
-                  </div>
-
-                ) : teamMembers.length === 0 ? (
-
-                  <div className="orbi-empty-state">
-
-                    <div className="orbi-empty-icon">
-
-                      <Icon name="team" size={24} />
-
-                    </div>
-
-                    <h3>No direct members yet</h3>
-
-                  </div>
-
-                ) : (
-
-                  <div style={{ width: "100%", overflowX: "auto" }}>
-
-                    <table
-
-                      style={{
-
-                        width: "100%",
-
-                        minWidth: 1080,
-
-                        borderCollapse: "collapse",
-
-                      }}
-
-                    >
-
-                      <thead>
-
-                        <tr>
-
-                          {[
-
-                            "USER ID",
-
-                            "WALLET",
-
-                            "STATUS",
-
-                            "DIRECTS",
-
-                            "ACTIVE DIRECTS",
-
-                            "LIFETIME BUSINESS",
-
-                            "RANK",
-
-                            "ACTIVITY",
-
-                          ].map((heading) => (
-
-                            <th
-
-                              key={heading}
-
-                              style={{
-
-                                textAlign: "left",
-
-                                padding: "14px 12px",
-
-                                borderBottom: "1px solid rgba(148,163,184,.18)",
-
-                                whiteSpace: "nowrap",
-
-                                fontSize: 11,
-
-                                letterSpacing: ".08em",
-
-                                opacity: 0.7,
-
-                              }}
-
-                            >
-
-                              {heading}
-
-                            </th>
-
-                          ))}
-
-                        </tr>
-
-                      </thead>
-
-                      <tbody>
-
-                        {teamMembers.map((member) => {
-
-                          const isActive =
-
-                            member.status === BigInt(USER_STATUS.ACTIVE);
-
-                          return (
-
-                            <tr key={member.id.toString()}>
-
-                              <td style={{ padding: "15px 12px", fontWeight: 700 }}>
-
-                                #{member.id.toString()}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
-
-                                {shortAddress(member.wallet)}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px" }}>
-
-                                <span
-
-                                  style={{
-
-                                    display: "inline-flex",
-
-                                    alignItems: "center",
-
-                                    gap: 7,
-
-                                    padding: "6px 9px",
-
-                                    borderRadius: 999,
-
-                                    background: isActive
-
-                                      ? "rgba(34,197,94,.12)"
-
-                                      : "rgba(148,163,184,.10)",
-
-                                    fontSize: 11,
-
-                                    fontWeight: 700,
-
-                                  }}
-
-                                >
-
-                                  <span
-
-                                    style={{
-
-                                      width: 6,
-
-                                      height: 6,
-
-                                      borderRadius: "50%",
-
-                                      background: isActive ? "#22c55e" : "#94a3b8",
-
-                                    }}
-
-                                  />
-
-                                  {member.activityLabel}
-
-                                </span>
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px" }}>
-
-                                {member.directCount.toString()}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px" }}>
-
-                                {member.activeDirectCount.toString()}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
-
-                                ${formatUsdt(member.lifetimeBusiness)}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px" }}>
-
-                                {member.rank.toString()}
-
-                              </td>
-
-                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
-
-                                {member.activityLabel}
-
-                              </td>
-
-                            </tr>
-
-                          );
-
-                        })}
-
-                      </tbody>
-
-                    </table>
-
-                  </div>
-
-                )}
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Level Income") {
-
-      const qualifiedLevelCount =
-
-        user.status === BigInt(USER_STATUS.ACTIVE) && activePackages.length > 0
-
-          ? Math.min(10, Number(user.activeDirectCount))
-
-          : 0;
-
-      const formatLevelPercent = (bps: bigint) => {
-
-        const percent = Number(bps) / 100;
-
-        if (!Number.isFinite(percent)) return "0%";
-
-        return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(2)}%`;
-
-      };
-
-      const formatHistoryDate = (timestamp: number) => {
-
-        if (!timestamp) return "—";
-
-        return new Date(timestamp * 1000).toLocaleDateString("en-US", {
-
-          day: "2-digit",
-
-          month: "short",
-
-          year: "numeric",
-
-        });
-
-      };
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN INCOME
-
-              </div>
-
-              <h1>Level Income<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={() => loadLevelIncome(user.id)}
-
-              disabled={levelIncomeLoading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {levelIncomeLoading ? "Loading..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {levelIncomeError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{levelIncomeError}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section
-
-                className="orbi-package-overview-grid orbi-level-overview"
-
-                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
-
-              >
-
-                <div>
-
-                  <span>TOTAL LEVEL INCOME</span>
-
-                  <strong>${formatUsdt(user.totalLevelIncome)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>CURRENT LEVEL</span>
-
-                  <strong>{qualifiedLevelCount > 0 ? `L${qualifiedLevelCount}` : "NONE"}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ACTIVE DIRECTS</span>
-
-                  <strong>{user.activeDirectCount.toString()}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>LEVEL SYSTEM</span>
-
-                  <strong>{levelIncomeEnabled ? "ACTIVE" : "OFF"}</strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section orbi-level-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">LEVEL INCOME PLAN</span>
-
-                    <h2>10-Level qualification</h2>
-
-                  </div>
-
-                  <div className={`orbi-level-system-pill ${levelIncomeEnabled ? "is-on" : "is-off"}`}>
-
-                    {levelIncomeEnabled ? "ENABLED" : "DISABLED"}
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-level-table-wrap">
-
-                  <table className="orbi-level-table">
-
-                    <thead>
-
-                      <tr>
-
-                        <th>LEVEL</th>
-
-                        <th>RATE</th>
-
-                        <th>REQUIRED</th>
-
-                        <th>STATUS</th>
-
-                      </tr>
-
-                    </thead>
-
-                    <tbody>
-
-                      {Array.from({ length: 10 }, (_, index) => {
-
-                        const level = index + 1;
-
-                        const unlocked =
-
-                          levelIncomeEnabled &&
-
-                          user.status === BigInt(USER_STATUS.ACTIVE) &&
-
-                          activePackages.length > 0 &&
-
-                          Number(user.activeDirectCount) >= level;
-
-                        return (
-
-                          <tr key={level} className={unlocked ? "is-unlocked" : ""}>
-
-                            <td><strong>L{level}</strong></td>
-
-                            <td><strong>{formatLevelPercent(levelIncomeBps[index] ?? 0n)}</strong></td>
-
-                            <td>{level} Active Direct{level === 1 ? "" : "s"}</td>
-
-                            <td>
-
-                              <span className={`orbi-level-status ${unlocked ? "unlocked" : "locked"}`}>
-
-                                <span />
-
-                                {unlocked ? "UNLOCKED" : "LOCKED"}
-
-                              </span>
-
-                            </td>
-
-                          </tr>
-
-                        );
-
-                      })}
-
-                    </tbody>
-
-                  </table>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section orbi-level-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">PAYOUT HISTORY</span>
-
-                    <h2>Recent Level Income</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>{levelIncomeHistory.length} events indexed</span>
-
-                  </div>
-
-                </div>
-
-                {levelIncomeLoading ? (
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="refresh" size={24} />
-
-                    <span>Reading Level Income events from blockchain...</span>
-
-                  </div>
-
-                ) : levelIncomeHistory.length === 0 ? (
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="money" size={24} />
-
-                    <span>No Level Income payouts found yet.</span>
-
-                  </div>
-
-                ) : (
-
-                  <div className="orbi-level-history-wrap">
-
-                    <table className="orbi-level-table">
-
-                      <thead>
-
-                        <tr>
-
-                          <th>LEVEL</th>
-
-                          <th>FROM USER</th>
-
-                          <th>AMOUNT</th>
-
-                          <th>DATE</th>
-
-                          <th>BLOCK</th>
-
-                        </tr>
-
-                      </thead>
-
-                      <tbody>
-
-                        {levelIncomeHistory.map((entry, index) => (
-
-                          <tr key={`${entry.blockNumber}-${index}`}>
-
-                            <td><strong>L{entry.level.toString()}</strong></td>
-
-                            <td>#{entry.fromUserId.toString()}</td>
-
-                            <td><strong>${formatUsdt(entry.amount)}</strong></td>
-
-                            <td>{formatHistoryDate(entry.timestamp)}</td>
-
-                            <td>#{entry.blockNumber.toLocaleString("en-US")}</td>
-
-                          </tr>
-
-                        ))}
-
-                      </tbody>
-
-                    </table>
-
-                  </div>
-
-                )}
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Rank & Rewards") {
-
-      const currentRank = Math.min(
-
-        rankRequirements.length,
-
-        Math.max(0, Number(user.rank))
-
-      );
-
-      const nextRankIndex = currentRank;
-
-      const nextRequirement = rankRequirements[nextRankIndex];
-
-      const isMaxRank = !nextRequirement && rankRequirements.length > 0;
-
-      const powerBusiness = user.powerLegBusiness;
-
-      const otherBusiness = user.otherLegBusiness;
-
-      const powerProgress = nextRequirement && nextRequirement.requiredPowerLeg > 0n
-
-        ? Math.min(
-
-            100,
-
-            Number(
-
-              (powerBusiness * 10000n) / nextRequirement.requiredPowerLeg
-
-            ) / 100
-
-          )
-
-        : isMaxRank
-
-          ? 100
-
-          : 0;
-
-      const otherProgress = nextRequirement && nextRequirement.requiredOtherLeg > 0n
-
-        ? Math.min(
-
-            100,
-
-            Number(
-
-              (otherBusiness * 10000n) / nextRequirement.requiredOtherLeg
-
-            ) / 100
-
-          )
-
-        : isMaxRank
-
-          ? 100
-
-          : 0;
-
-      const overallProgress = Math.min(powerProgress, otherProgress);
-
-      const formatRankBusiness = (value: bigint) => `$${formatUsdt(value)}`;
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN ACHIEVEMENT
-
-              </div>
-
-              <h1>Rank & Rewards<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={loadRankRewards}
-
-              disabled={rankLoading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {rankLoading ? "Loading..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {rankError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{rankError}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section
-
-                className="orbi-package-overview-grid"
-
-                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
-
-              >
-
-                <div>
-
-                  <span>CURRENT RANK</span>
-
-                  <strong>{currentRank === 0 ? "NONE" : `R${currentRank}`}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>NEXT RANK</span>
-
-                  <strong>{isMaxRank ? "MAX" : `R${nextRankIndex + 1}`}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>RANK WALLET</span>
-
-                  <strong>${formatUsdt(user.rankWallet)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>REWARD SYSTEM</span>
-
-                  <strong>{rankRewardEnabled ? "ACTIVE" : "OFF"}</strong>
-
-                </div>
-
-              </section>
-
-              {!rankLoading && rankRequirements.length === 0 ? (
-
-                <section className="orbi-card orbi-package-section">
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="trophy" size={24} />
-
-                    <span>No rank configuration could be loaded.</span>
-
-                  </div>
-
-                </section>
-
-              ) : (
-
-                <>
-
-                  <section className="orbi-card orbi-package-section">
-
-                    <div className="orbi-card-head">
-
-                      <div>
-
-                        <span className="orbi-section-kicker">CURRENT PROGRESS</span>
-
-                        <h2>Path to {isMaxRank ? "maximum rank" : `Rank ${nextRankIndex + 1}`}</h2>
-
-                      </div>
-
-                      <div className="orbi-package-summary">
-
-                        <span>OVERALL PROGRESS</span>
-
-                        <strong>{overallProgress.toFixed(1)}%</strong>
-
-                      </div>
-
-                    </div>
-
-                    {isMaxRank ? (
-
-                      <div className="orbi-no-data">
-
-                        <Icon name="trophy" size={24} />
-
-                        <span>Maximum rank achieved.</span>
-
-                      </div>
-
-                    ) : (
-
-                      <div style={{ display: "grid", gap: 18 }}>
-
-                        {[
-
-                          {
-
-                            label: "POWER LEG BUSINESS",
-
-                            current: powerBusiness,
-
-                            required: nextRequirement?.requiredPowerLeg ?? 0n,
-
-                            progress: powerProgress,
-
-                          },
-
-                          {
-
-                            label: "OTHER LEG BUSINESS",
-
-                            current: otherBusiness,
-
-                            required: nextRequirement?.requiredOtherLeg ?? 0n,
-
-                            progress: otherProgress,
-
-                          },
-
-                        ].map((leg) => (
-
-                          <div key={leg.label}>
-
-                            <div
-
-                              style={{
-
-                                display: "flex",
-
-                                justifyContent: "space-between",
-
-                                gap: 16,
-
-                                marginBottom: 8,
-
-                              }}
-
-                            >
-
-                              <span style={{ fontSize: 11, letterSpacing: ".08em", opacity: 0.72 }}>
-
-                                {leg.label}
-
-                              </span>
-
-                              <strong style={{ fontSize: 13 }}>
-
-                                {formatRankBusiness(leg.current)} / {formatRankBusiness(leg.required)}
-
-                              </strong>
-
-                            </div>
-
-                            <div
-
-                              style={{
-
-                                height: 8,
-
-                                borderRadius: 999,
-
-                                background: "rgba(148,163,184,.12)",
-
-                                overflow: "hidden",
-
-                              }}
-
-                            >
-
-                              <div
-
-                                style={{
-
-                                  width: `${leg.progress}%`,
-
-                                  height: "100%",
-
-                                  borderRadius: 999,
-
-                                  background: "linear-gradient(90deg,#22c55e,#3b82f6)",
-
-                                }}
-
-                              />
-
-                            </div>
-
-                            <div style={{ marginTop: 7, fontSize: 11, opacity: 0.62 }}>
-
-                              {leg.progress.toFixed(1)}% complete
-
-                            </div>
-
-                          </div>
-
-                        ))}
-
-                      </div>
-
-                    )}
-
-                  </section>
-
-                  <section className="orbi-card orbi-package-section">
-
-                    <div className="orbi-card-head">
-
-                      <div>
-
-                        <span className="orbi-section-kicker">RANK PLAN</span>
-
-                        <h2>6-Level rank qualification</h2>
-
-                      </div>
-
-                      <div className="orbi-package-summary">
-
-                        <span>{rankRequirements.length} ranks configured</span>
-
-                      </div>
-
-                    </div>
-
-                    <div style={{ width: "100%", overflowX: "auto" }}>
-
-                      <table
-
-                        style={{
-
-                          width: "100%",
-
-                          minWidth: 820,
-
-                          borderCollapse: "collapse",
-
-                        }}
-
-                      >
-
-                        <thead>
-
-                          <tr>
-
-                            {["RANK", "POWER LEG REQUIRED", "OTHER LEG REQUIRED", "REWARD", "STATUS"].map((heading) => (
-
-                              <th
-
-                                key={heading}
-
-                                style={{
-
-                                  textAlign: "left",
-
-                                  padding: "14px 12px",
-
-                                  borderBottom: "1px solid rgba(148,163,184,.18)",
-
-                                  whiteSpace: "nowrap",
-
-                                  fontSize: 11,
-
-                                  letterSpacing: ".08em",
-
-                                  opacity: 0.7,
-
-                                }}
-
-                              >
-
-                                {heading}
-
-                              </th>
-
-                            ))}
-
-                          </tr>
-
-                        </thead>
-
-                        <tbody>
-
-                          {rankRequirements.map((requirement, index) => {
-
-                            const rankNumber = index + 1;
-
-                            const achieved = currentRank >= rankNumber;
-
-                            const isNext = currentRank === index;
-
-                            return (
-
-                              <tr key={rankNumber}>
-
-                                <td style={{ padding: "15px 12px", fontWeight: 700 }}>
-
-                                  R{rankNumber}
-
-                                </td>
-
-                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
-
-                                  ${formatUsdt(requirement.requiredPowerLeg)}
-
-                                </td>
-
-                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
-
-                                  ${formatUsdt(requirement.requiredOtherLeg)}
-
-                                </td>
-
-                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap", fontWeight: 700 }}>
-
-                                  ${formatUsdt(requirement.reward)}
-
-                                </td>
-
-                                <td style={{ padding: "15px 12px" }}>
-
-                                  <span
-
-                                    style={{
-
-                                      display: "inline-flex",
-
-                                      alignItems: "center",
-
-                                      gap: 7,
-
-                                      padding: "6px 10px",
-
-                                      borderRadius: 999,
-
-                                      background: achieved
-
-                                        ? "rgba(34,197,94,.12)"
-
-                                        : isNext
-
-                                          ? "rgba(59,130,246,.12)"
-
-                                          : "rgba(148,163,184,.10)",
-
-                                      fontSize: 11,
-
-                                      fontWeight: 700,
-
-                                    }}
-
-                                  >
-
-                                    <span
-
-                                      style={{
-
-                                        width: 6,
-
-                                        height: 6,
-
-                                        borderRadius: "50%",
-
-                                        background: achieved
-
-                                          ? "#22c55e"
-
-                                          : isNext
-
-                                            ? "#3b82f6"
-
-                                            : "#94a3b8",
-
-                                      }}
-
-                                    />
-
-                                    {achieved ? "ACHIEVED" : isNext ? "NEXT" : "LOCKED"}
-
-                                  </span>
-
-                                </td>
-
-                              </tr>
-
-                            );
-
-                          })}
-
-                        </tbody>
-
-                      </table>
-
-                    </div>
-
-                  </section>
-
-                  <section className="orbi-card orbi-package-section">
-
-                    <div className="orbi-card-head">
-
-                      <div>
-
-                        <span className="orbi-section-kicker">REWARD SUMMARY</span>
-
-                        <h2>Rank reward wallet</h2>
-
-                      </div>
-
-                      <Icon name="trophy" size={22} />
-
-                    </div>
-
-                    <div className="orbi-income-list">
-
-                      <IncomeRow label="Rank Wallet" value={user.rankWallet} />
-
-                      <IncomeRow label="Total Rank Income" value={user.totalRankIncome} />
-
-                    </div>
-
-                  </section>
-
-                </>
-
-              )}
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-if (activeNav === "Earnings") {
-
-      const roiIncome = user.totalROIIncome;
-
-      const levelIncome = user.totalLevelIncome;
-
-      const rankIncome = user.totalRankIncome;
-
-
-      const totalGenerated =
-
-        roiIncome + levelIncome + rankIncome;
-
-      const packageRoiPaid = packages.reduce(
-
-        (sum, item) => sum + item.roiPaid,
-
-        0n
-
-      );
-
-      const packageLevelPaid = packages.reduce(
-
-        (sum, item) => sum + item.levelPaid,
-
-        0n
-
-      );
-
-      const incomeRows = [
-
-        { label: "ROI Income", value: roiIncome, icon: "package" },
-
-        { label: "Level Income", value: levelIncome, icon: "link" },
-
-        { label: "Rank Income", value: rankIncome, icon: "trophy" },
-
-
-      ];
-
-      const incomeShare = (value: bigint) => {
-
-        if (totalGenerated <= 0n) return 0;
-
-        return Math.min(
-
-          100,
-
-          Number((value * 10000n) / totalGenerated) / 100
-
-        );
-
-      };
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN EARNINGS
-
-              </div>
-
-              <h1>Earnings<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={refresh}
-
-              disabled={loading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {loading ? "Refreshing..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {networkError && (
-
-            <div className="orbi-alert orbi-alert-warning">
-
-              <Icon name="alert" size={18} />
-
-              <span>{networkError}</span>
-
-            </div>
-
-          )}
-
-          {error && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{error}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section
-
-                className="orbi-package-overview-grid"
-
-                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
-
-              >
-
-                <div>
-
-                  <span>TOTAL EARNINGS</span>
-
-                  <strong>${formatUsdt(totalGenerated)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>AVAILABLE EARNINGS</span>
-
-                  <strong>${formatUsdt(user.earningWallet)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TOTAL WITHDRAWN</span>
-
-                  <strong>${formatUsdt(user.totalWithdrawn)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>INCOME SOURCES</span>
-
-                  <strong>4</strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-two-column">
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">INCOME BREAKDOWN</span>
-
-                      <h2>Where your earnings came from</h2>
-
-                    </div>
-
-                    <Icon name="money" size={22} />
-
-                  </div>
-
-                  <div className="orbi-income-list">
-
-                    {incomeRows.map((row) => {
-
-                      const share = incomeShare(row.value);
-
-                      return (
-
-                        <div key={row.label} style={{ padding: "13px 0" }}>
-
-                          <div
-
-                            style={{
-
-                              display: "flex",
-
-                              alignItems: "center",
-
-                              justifyContent: "space-between",
-
-                              gap: 12,
-
-                            }}
-
-                          >
-
-                            <div
-
-                              style={{
-
-                                display: "flex",
-
-                                alignItems: "center",
-
-                                gap: 9,
-
-                              }}
-
-                            >
-
-                              <span
-
-                                style={{
-
-                                  width: 28,
-
-                                  height: 28,
-
-                                  display: "grid",
-
-                                  placeItems: "center",
-
-                                  borderRadius: 8,
-
-                                  color: "#9bcfff",
-
-                                  background: "rgba(22,140,255,.08)",
-
-                                  border: "1px solid rgba(22,140,255,.14)",
-
-                                }}
-
-                              >
-
-                                <Icon name={row.icon} size={14} />
-
-                              </span>
-
-                              <span style={{ color: "#b8c7d9", fontSize: 12 }}>
-
-                                {row.label}
-
-                              </span>
-
-                            </div>
-
-                            <strong style={{ fontSize: 13 }}>
-
-                              ${formatUsdt(row.value)}
-
-                            </strong>
-
-                          </div>
-
-                          <div
-
-                            style={{
-
-                              height: 5,
-
-                              marginTop: 9,
-
-                              borderRadius: 999,
-
-                              overflow: "hidden",
-
-                              background: "rgba(148,163,184,.10)",
-
-                            }}
-
-                          >
-
-                            <div
-
-                              style={{
-
-                                width: `${share}%`,
-
-                                height: "100%",
-
-                                borderRadius: 999,
-
-                                background:
-
-                                  "linear-gradient(90deg,#168cff,#7357ff)",
-
-                              }}
-
-                            />
-
-                          </div>
-
-                          <div
-
-                            style={{
-
-                              marginTop: 5,
-
-                              color: "var(--od-muted-2)",
-
-                              fontSize: 9,
-
-                            }}
-
-                          >
-
-                            {share.toFixed(1)}% of total earnings
-
-                          </div>
-
-                        </div>
-
-                      );
-
-                    })}
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">WALLET SUMMARY</span>
-
-                      <h2>Income wallets</h2>
-
-                    </div>
-
-                    <Icon name="wallet" size={22} />
-
-                  </div>
-
-                  <div className="orbi-income-list">
-
-                    <IncomeRow label="Earning Wallet" value={user.earningWallet} />
-
-                    <IncomeRow label="Rank Wallet" value={user.rankWallet} />
-
-                    <IncomeRow label="Royalty Wallet" value={user.royaltyWallet} />
-
-                    <IncomeRow label="Total Withdrawn" value={user.totalWithdrawn} />
-
-                  </div>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">PACKAGE INCOME</span>
-
-                    <h2>ROI & Level earnings from packages</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>{packages.length} packages</span>
-
-                    <strong>${formatUsdt(packageRoiPaid + packageLevelPaid)}</strong>
-
-                  </div>
-
-                </div>
-
-                <div
-
-                  className="orbi-package-overview-grid"
-
-                  style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
-
-                >
-
-                  <div>
-
-                    <span>ROI PAID</span>
-
-                    <strong>${formatUsdt(packageRoiPaid)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>LEVEL PAID</span>
-
-                    <strong>${formatUsdt(packageLevelPaid)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>ACTIVE PACKAGES</span>
-
-                    <strong>{activePackages.length}</strong>
-
-                  </div>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">EARNINGS ACCOUNTING</span>
-
-                    <h2>On-chain earnings position</h2>
-
-                  </div>
-
-                  <Icon name="activity" size={22} />
-
-                </div>
-
-                <div className="orbi-activity-grid">
-
-                  <div>
-
-                    <span>TOTAL GENERATED</span>
-
-                    <strong>${formatUsdt(totalGenerated)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>AVAILABLE IN EARNING WALLET</span>
-
-                    <strong>${formatUsdt(user.earningWallet)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>RANK REWARD BALANCE</span>
-
-                    <strong>${formatUsdt(user.rankWallet)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>ROYALTY REWARD BALANCE</span>
-
-                    <strong>${formatUsdt(user.royaltyWallet)}</strong>
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-activity-foot">
-
-                  <span>
-
-                    All financial values shown here are sourced from the connected
-
-                    wallet's ORBI WORLD profile and package records.
-
-                  </span>
-
-                  <a
-
-                    href={`${BLOCK_EXPLORER}/address/${wallet}`}
-
-                    target="_blank"
-
-                    rel="noreferrer"
-
-                  >
-
-                    Open wallet on explorer
-
-                    <Icon name="external" size={14} />
-
-                  </a>
-
-                </div>
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Withdraw") {
-
-      const selectedAvailable =
-
-        withdrawWallet === 0
-
-          ? user.earningWallet
-
-          : withdrawWallet === 1
-
-            ? user.rankWallet
-
-            : user.royaltyWallet;
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ON-CHAIN WITHDRAWAL
-
-              </div>
-
-              <h1>Withdraw<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={() => loadWithdrawals(user.id)}
-
-              disabled={withdrawalLoading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {withdrawalLoading ? "Loading..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {withdrawalError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{withdrawalError}</span>
-
-            </div>
-
-          )}
-
-          {withdrawalMessage && (
-
-            <div className={`orbi-alert ${withdrawalMessage.toLowerCase().includes("successfully") || withdrawalMessage.toLowerCase().includes("pending admin") ? "orbi-alert-success" : ""}`}>
-
-              <Icon name="alert" size={18} />
-
-              <span>{withdrawalMessage}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section
-
-                className="orbi-package-overview-grid"
-
-                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
-
-              >
-
-                <div>
-
-                  <span>EARNING WALLET</span>
-
-                  <strong>${formatUsdt(user.earningWallet)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>RANK WALLET</span>
-
-                  <strong>${formatUsdt(user.rankWallet)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ROYALTY WALLET</span>
-
-                  <strong>${formatUsdt(user.royaltyWallet)}</strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-two-column">
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">REQUEST WITHDRAWAL</span>
-
-                      <h2>Create a request</h2>
-
-                    </div>
-
-                    <Icon name="withdraw" size={22} />
-
-                  </div>
-
-                  <div className="orbi-withdraw-form">
-
-                    <div className="orbi-modal-field">
-
-                      <div className="orbi-modal-label-row">
-
-                        <label htmlFor="orbi-withdraw-wallet">WALLET</label>
-
-                      </div>
-
-                      <select
-
-                        id="orbi-withdraw-wallet"
-
-                        value={withdrawWallet}
-
-                        onChange={(event) => {
-
-                          setWithdrawWallet(Number(event.target.value));
-
-                          setWithdrawalMessage("");
-
-                        }}
-
-                        disabled={withdrawalBusy}
-
-                      >
-
-                        <option value={0}>Earning Wallet — ${formatUsdt(user.earningWallet)}</option>
-
-                        <option value={1}>Rank Wallet — ${formatUsdt(user.rankWallet)}</option>
-
-                        <option value={2}>Royalty Wallet — ${formatUsdt(user.royaltyWallet)}</option>
-
-                      </select>
-
-                    </div>
-
-                    <div className="orbi-modal-field">
-
-                      <div className="orbi-modal-label-row">
-
-                        <label htmlFor="orbi-withdraw-amount">AMOUNT</label>
-
-                        <button
-
-                          type="button"
-
-                          onClick={() => setWithdrawAmount(ethers.formatUnits(selectedAvailable, 18))}
-
-                          disabled={withdrawalBusy || selectedAvailable <= 0n}
-
-                        >
-
-                          MAX
-
-                        </button>
-
-                      </div>
-
-                      <div className="orbi-amount-input-wrap">
-
-                        <span>$</span>
-
-                        <input
-
-                          id="orbi-withdraw-amount"
-
-                          type="text"
-
-                          inputMode="decimal"
-
-                          autoComplete="off"
-
-                          placeholder="0.00"
-
-                          value={withdrawAmount}
-
-                          onChange={(event) => {
-
-                            const value = event.target.value;
-
-                            if (/^\d*(?:\.\d{0,18})?$/.test(value)) {
-
-                              setWithdrawAmount(value);
-
-                              setWithdrawalMessage("");
-
-                            }
-
-                          }}
-
-                          disabled={withdrawalBusy}
-
-                        />
-
-                        <span>USDT</span>
-
-                      </div>
-
-                    </div>
-
-                    <div className="orbi-withdraw-preview">
-
-                      <div><span>WITHDRAWAL FEE</span><strong>${formatUsdt(withdrawalFeePreview)}</strong></div>
-
-                      <div><span>ESTIMATED NET</span><strong>${formatUsdt(withdrawalNetPreview)}</strong></div>
-
-                    </div>
-
-                    <div className="orbi-withdraw-rules">
-
-                      <div><span>MINIMUM</span><b>${formatUsdt(withdrawalMinimum)}</b></div>
-
-                      <div><span>FEE</span><b>{(Number(withdrawalFeeBps) / 100).toFixed(2)}%</b></div>
-
-                      <div><span>REQUESTS</span><b>1 pending max</b></div>
-
-                    </div>
-
-                    <button
-
-                      className="orbi-modal-submit"
-
-                      onClick={requestWithdrawal}
-
-                      disabled={
-
-                        withdrawalBusy ||
-
-                        !withdrawAmount ||
-
-                        !withdrawalEnabled ||
-
-                        withdrawalLoading ||
-
-                        withdrawalHistory.some((row) => row.status === "PENDING")
-
-                      }
-
-                    >
-
-                      {withdrawalBusy ? "Submitting Request..." : "Request Withdrawal"}
-
-                    </button>
-
-                    {withdrawalTxHash && (
-
-                      <a
-
-                        className="orbi-modal-tx"
-
-                        href={`${BLOCK_EXPLORER}/tx/${withdrawalTxHash}`}
-
-                        target="_blank"
-
-                        rel="noreferrer"
-
-                      >
-
-                        View transaction on BscScan <Icon name="external" size={13} />
-
-                      </a>
-
-                    )}
-
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">WITHDRAWAL STATUS</span>
-
-                      <h2>Request lifecycle</h2>
-
-                    </div>
-
-                    <Icon name="activity" size={22} />
-
-                  </div>
-
-                  <div className="orbi-withdraw-lifecycle">
-
-                    <div><span>1</span><div><b>REQUESTED</b></div></div>
-
-                    <div><span>2</span><div><b>ADMIN REVIEW</b></div></div>
-
-                    <div><span>3</span><div><b>APPROVED / REJECTED</b></div></div>
-
-                  </div>
-
-                  {withdrawalHistory.some((row) => row.status === "PENDING") && (
-
-                    <div className="orbi-withdraw-pending">
-
-                      <Icon name="activity" size={17} />
-
-                      <div>
-
-                        <b>Withdrawal request pending</b>
-
-                        <span>Wait for the current request to be approved or rejected before creating another.</span>
-
-                      </div>
-
-                    </div>
-
-                  )}
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">WITHDRAWAL HISTORY</span>
-
-                    <h2>Recent requests</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>REQUESTS</span>
-
-                    <strong>{withdrawalHistory.length}</strong>
-
-                  </div>
-
-                </div>
-
-                {withdrawalLoading && withdrawalHistory.length === 0 ? (
-
-                  <div className="orbi-no-data"><Icon name="refresh" size={24} /><span>Loading withdrawal history...</span></div>
-
-                ) : withdrawalHistory.length === 0 ? (
-
-                  <div className="orbi-no-data"><Icon name="withdraw" size={24} /><span>No withdrawal requests found.</span></div>
-
-                ) : (
-
-                  <div className="orbi-withdraw-history-wrap">
-
-                    <table className="orbi-withdraw-table">
-
-                      <thead>
-
-                        <tr><th>REQUEST</th><th>WALLET</th><th>AMOUNT</th><th>FEE</th><th>NET</th><th>STATUS</th><th>BLOCK</th></tr>
-
-                      </thead>
-
-                      <tbody>
-
-                        {withdrawalHistory.map((row) => (
-
-                          <tr key={row.requestId.toString()}>
-
-                            <td>#{row.requestId.toString()}</td>
-
-                            <td>{row.walletType === 0 ? "EARNING" : row.walletType === 1 ? "RANK" : "ROYALTY"}</td>
-
-                            <td>${formatUsdt(row.amount)}</td>
-
-                            <td>${formatUsdt(row.fee)}</td>
-
-                            <td>${formatUsdt(row.netAmount)}</td>
-
-                            <td>
-
-                              <span className={`orbi-withdraw-status ${row.status.toLowerCase()}`}>
-
-                                {row.status}
-
-                              </span>
-
-                            </td>
-
-                            <td>#{row.blockNumber}</td>
-
-                          </tr>
-
-                        ))}
-
-                      </tbody>
-
-                    </table>
-
-                  </div>
-
-                )}
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Emergency Exit") {
-
-      const emergencyStatus = emergencyLoading
-
-        ? "CHECKING"
-
-        : !emergencyEnabled
-
-          ? "DISABLED"
-
-          : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
-
-            ? "COMPLETED"
-
-            : emergencyEligiblePackages.length > 0
-
-              ? "ELIGIBLE"
-
-              : "LOCKED";
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow orbi-emergency-eyebrow">
-
-                <span className="orbi-emergency-dot" />
-
-                EMERGENCY CAPITAL EXIT
-
-              </div>
-
-              <h1>Emergency Exit<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={loadEmergencyConfig}
-
-              disabled={emergencyLoading || emergencyBusy || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {emergencyLoading ? "Checking..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {emergencyMessage && (
-
-            <div
-
-              className={`orbi-alert ${
-
-                emergencyMessage.toLowerCase().includes("successfully")
-
-                  ? "orbi-alert-success"
-
-                  : ""
-
-              }`}
-
-            >
-
-              <Icon name="alert" size={18} />
-
-              <span>{emergencyMessage}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art orbi-emergency-art">
-
-                <Icon name="alert" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section className="orbi-emergency-overview">
-
-                <div>
-
-                  <span>ACTIVE PACKAGES</span>
-
-                  <strong>{activePackages.length}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ELIGIBLE PACKAGES</span>
-
-                  <strong>{emergencyEligiblePackages.length}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>ESTIMATED RETURN</span>
-
-                  <strong>${formatUsdt(emergencyReturn)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>EXIT STATUS</span>
-
-                  <strong
-
-                    className={
-
-                      emergencyStatus === "ELIGIBLE"
-
-                        ? "orbi-emergency-status-value eligible"
-
-                        : "orbi-emergency-status-value"
-
-                    }
-
-                  >
-
-                    {emergencyStatus}
-
-                  </strong>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-two-column">
-
-                <div className="orbi-card orbi-emergency-action-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">PERMANENT ACTION</span>
-
-                      <h2>Emergency Capital Withdrawal</h2>
-
-                    </div>
-
-                    <Icon name="alert" size={22} />
-
-                  </div>
-
-                  <div className="orbi-emergency-warning">
-
-                    <Icon name="alert" size={18} />
-
-                    <div>
-
-                      <strong>This action cannot be reversed.</strong>
-
-                      <span>
-
-                        All active packages are permanently closed and your
-
-                        account moves to EMERGENCY EXIT status.
-
-                      </span>
-
-                    </div>
-
-                  </div>
-
-                  <div className="orbi-emergency-rules">
-
-                    <div>
-
-                      <span>01</span>
-
-                      <div>
-
-                        <b>All active packages close</b>
-
-                      </div>
-
-                    </div>
-
-                    <div>
-
-                      <span>02</span>
-
-                      <div>
-
-                        <b>70% capital rule applies</b>
-
-                      </div>
-
-                    </div>
-
-                    <div>
-
-                      <span>03</span>
-
-                      <div>
-
-                        <b>Return is calculated on-chain</b>
-
-                      </div>
-
-                    </div>
-
-                  </div>
-
-                  <button
-
-                    className="orbi-emergency-submit"
-
-                    onClick={() => setEmergencyConfirmOpen(true)}
-
-                    disabled={
-
-                      emergencyBusy ||
-
-                      emergencyLoading ||
-
-                      !emergencyEnabled ||
-
-                      user.status === BigInt(USER_STATUS.EMERGENCY_EXIT) ||
-
-                      emergencyEligiblePackages.length === 0
-
-                    }
-
-                  >
-
-                    <Icon name="alert" size={17} />
-
-                    {emergencyBusy
-
-                      ? "Processing Emergency Exit..."
-
-                      : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
-
-                        ? "Emergency Exit Completed"
-
-                        : !emergencyEnabled
-
-                          ? "Emergency Exit Disabled"
-
-                          : emergencyEligiblePackages.length === 0
-
-                            ? "No Eligible Packages"
-
-                            : "Continue to Emergency Exit"}
-
-                  </button>
-
-                  {emergencyTxHash && (
-
-                    <a
-
-                      className="orbi-modal-tx"
-
-                      href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
-
-                      target="_blank"
-
-                      rel="noreferrer"
-
-                    >
-
-                      View Emergency Exit transaction on BscScan
-
-                      <Icon name="external" size={13} />
-
-                    </a>
-
-                  )}
-
-                </div>
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">EXIT PROCESS</span>
-
-                      <h2>What happens next?</h2>
-
-                    </div>
-
-                    <Icon name="activity" size={22} />
-
-                  </div>
-
-                  <div className="orbi-withdraw-lifecycle orbi-emergency-lifecycle">
-
-                    <div>
-
-                      <span>1</span>
-
-                      <div>
-
-                        <b>REVIEW</b>
-
-                      </div>
-
-                    </div>
-
-                    <div>
-
-                      <span>2</span>
-
-                      <div>
-
-                        <b>CONFIRM</b>
-
-                      </div>
-
-                    </div>
-
-                    <div>
-
-                      <span>3</span>
-
-                      <div>
-
-                        <b>ON-CHAIN EXECUTION</b>
-
-                      </div>
-
-                    </div>
-
-                    <div>
-
-                      <span>4</span>
-
-                      <div>
-
-                        <b>EMERGENCY EXIT</b>
-
-                      </div>
-
-                    </div>
-
-                  </div>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">PACKAGE ELIGIBILITY</span>
-
-                    <h2>Emergency return breakdown</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary">
-
-                    <span>ESTIMATED TOTAL</span>
-
-                    <strong>${formatUsdt(emergencyReturn)}</strong>
-
-                  </div>
-
-                </div>
-
-                {activePackages.length === 0 ? (
-
-                  <div className="orbi-no-data">
-
-                    <Icon name="package" size={24} />
-
-                    <span>No active packages.</span>
-
-                  </div>
-
-                ) : (
-
-                  <div className="orbi-emergency-package-list">
-
-                    {activePackages.map((item) => {
-
-                      const threshold = (item.amount * 70n) / 100n;
-
-                      const eligible = item.totalPaid < threshold;
-
-                      const returnAmount = eligible ? threshold - item.totalPaid : 0n;
-
-                      return (
-
-                        <div
-
-                          className={`orbi-emergency-package ${
-
-                            eligible ? "eligible" : "locked"
-
-                          }`}
-
-                          key={item.packageId.toString()}
-
-                        >
-
-                          <div>
-
-                            <span>PACKAGE</span>
-
-                            <b>#{item.packageId.toString()}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>STAKED</span>
-
-                            <b>${formatUsdt(item.amount)}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>TOTAL PAID</span>
-
-                            <b>${formatUsdt(item.totalPaid)}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>70% THRESHOLD</span>
-
-                            <b>${formatUsdt(threshold)}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>EST. RETURN</span>
-
-                            <b>${formatUsdt(returnAmount)}</b>
-
-                          </div>
-
-                          <span
-
-                            className={`orbi-emergency-package-badge ${
-
-                              eligible ? "eligible" : "locked"
-
-                            }`}
-
-                          >
-
-                            {eligible ? "ELIGIBLE" : "NO RETURN"}
-
-                          </span>
-
-                        </div>
-
-                      );
-
-                    })}
-
-                  </div>
-
-                )}
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Settings") {
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                ACCOUNT SETTINGS
-
-              </div>
-
-              <h1>Settings<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={loadSettings}
-
-              disabled={settingsLoading || !wallet}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {settingsLoading ? "Checking..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {settingsError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{settingsError}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="settings" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section className="orbi-stat-grid orbi-settings-overview">
-
-                <StatCard
-
-                  icon="wallet"
-
-                  label="CONNECTED WALLET"
-
-                  value={shortAddress(wallet)}
-
-                />
-
-                <StatCard
-
-                  icon="activity"
-
-                  label="ACCOUNT STATUS"
-
-                  value={statusLabel(user.status)}
-
-                />
-
-                <StatCard
-
-                  icon="network"
-
-                  label="NETWORK"
-
-                  value="BSC TESTNET"
-
-                />
-
-              </section>
-
-
-
-              <section className="orbi-card orbi-settings-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">PROTOCOL FEATURES</span>
-
-                    <h2>Smart-contract feature status</h2>
-
-                  </div>
-
-                  <Icon name="settings" size={22} />
-
-                </div>
-
-                {settingsLoading ? (
-
-                  <div className="orbi-settings-loading">
-
-                    <Icon name="refresh" size={18} />
-
-                    Reading live contract settings...
-
-                  </div>
-
-                ) : (
-
-                  <div className="orbi-settings-feature-grid">
-
-                    {[
-
-                      ["Registration", settingsFeatures.registrationEnabled],
-
-                      ["Staking", settingsFeatures.stakingEnabled],
-
-                      ["Withdrawals", settingsFeatures.withdrawalEnabled],
-
-                      ["Emergency Exit", settingsFeatures.capitalWithdrawalEnabled],
-
-                    ].map(([label, enabled]) => (
-
-                      <div className="orbi-settings-feature" key={String(label)}>
-
-                        <span className={`orbi-settings-feature-dot ${enabled ? "enabled" : "disabled"}`} />
-
-                        <div>
-
-                          <strong>{String(label)}</strong>
-
-                        </div>
-
-                        <b className={enabled ? "enabled" : "disabled"}>{enabled ? "ON" : "OFF"}</b>
-
-                      </div>
-
-                    ))}
-
-                  </div>
-
-                )}
-
-              </section>
-
-              <section className="orbi-two-column">
-
-                <div className="orbi-card orbi-settings-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">BALANCES</span>
-
-                      <h2>Wallet balances</h2>
-
-                    </div>
-
-                    <Icon name="money" size={22} />
-
-                  </div>
-
-                  <div className="orbi-balance-grid">
-
-                    <div><span>MOCUSDT</span><strong>${formatUsdt(usdtBalance)}</strong></div>
-
-                    <div><span>BNB</span><strong>{Number(ethers.formatEther(nativeBalance)).toFixed(4)} BNB</strong></div>
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-card orbi-settings-card orbi-settings-session-card">
-
-                  <div className="orbi-card-head">
-
-                    <div>
-
-                      <span className="orbi-section-kicker">WALLET SESSION</span>
-
-                      <h2>Connection controls</h2>
-
-                    </div>
-
-                    <Icon name="wallet" size={22} />
-
-                  </div>
-
-                  <button className="orbi-settings-disconnect" onClick={disconnectWallet}>
-
-                    <Icon name="close" size={16} />
-
-                    Disconnect Wallet
-
-                  </button>
-
-                </div>
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav === "Referral") {
-
-      const activeDirects = teamMembers.filter(
-
-        (member) => member.status === BigInt(USER_STATUS.ACTIVE)
-
-      ).length;
-
-      const inactiveDirects = Math.max(0, teamMembers.length - activeDirects);
-
-      const directBusiness = teamMembers.reduce(
-
-        (sum, member) => sum + (referralLegBusiness[member.id.toString()] ?? 0n),
-
-        0n
-
-      );
-
-      return (
-
-        <>
-
-          <section className="orbi-welcome">
-
-            <div>
-
-              <div className="orbi-eyebrow">
-
-                <span className="orbi-live-dot" />
-
-                NETWORK GROWTH
-
-              </div>
-
-              <h1>Referral Center<span>.</span></h1>
-
-            </div>
-
-            <button
-
-              className="orbi-refresh-btn"
-
-              onClick={() => wallet && dashboard.user.id > 0n && loadMyTeam(dashboard.user.id, wallet)}
-
-              disabled={teamLoading || !wallet || dashboard.user.id === 0n}
-
-            >
-
-              <Icon name="refresh" size={17} />
-
-              {teamLoading ? "Loading..." : "Refresh"}
-
-            </button>
-
-          </section>
-
-          {teamError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{teamError}</span>
-
-            </div>
-
-          )}
-
-          {referralBusinessError && (
-
-            <div className="orbi-alert">
-
-              <Icon name="alert" size={18} />
-
-              <span>{referralBusinessError}</span>
-
-            </div>
-
-          )}
-
-          {!wallet ? (
-
-            <section className="orbi-connect-panel">
-
-              <div className="orbi-connect-art">
-
-                <Icon name="wallet" size={34} />
-
-              </div>
-
-              <div className="orbi-connect-copy">
-
-                <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-                <h2>Connect your wallet</h2>
-
-              </div>
-
-              <button className="orbi-primary-btn" onClick={connectWallet}>
-
-                <Icon name="wallet" size={18} />
-
-                Connect Wallet
-
-              </button>
-
-            </section>
-
-          ) : (
-
-            <>
-
-              <section className="orbi-card orbi-referral-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">YOUR INVITE LINK</span>
-
-                    <h2>Share your referral link</h2>
-
-                  </div>
-
-                  <Icon name="link" size={22} />
-
-                </div>
-
-                <div className="orbi-referral-row">
-
-                  <div className="orbi-referral-input">
-
-                    <span>{referralLink || "Generating referral link..."}</span>
-
-                  </div>
-
-                  <button className="orbi-copy-btn" onClick={copyReferral} disabled={!referralLink}>
-
-                    <Icon name="copy" size={17} />
-
-                    {copied ? "Copied" : "Copy Link"}
-
-                  </button>
-
-                </div>
-
-              </section>
-
-              <section className="orbi-package-overview-grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-
-                <div><span>TOTAL DIRECTS</span><strong>{formatInteger(user.directCount)}</strong></div>
-
-                <div><span>ACTIVE DIRECTS</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
-
-                <div><span>DIRECT BUSINESS</span><strong>${referralBusinessLoading ? "…" : formatUsdt(directBusiness)}</strong></div>
-
-                <div><span>SPONSOR ID</span><strong>{user.sponsorId === 0n ? "—" : `#${user.sponsorId.toString()}`}</strong></div>
-
-              </section>
-
-              <section className="orbi-card orbi-package-section">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">DIRECT NETWORK</span>
-
-                    <h2>Your direct referrals</h2>
-
-                  </div>
-
-                  <div className="orbi-package-summary"><span>{teamMembers.length} loaded</span><strong>{activeDirects} active</strong></div>
-
-                </div>
-
-                {teamLoading && teamMembers.length === 0 ? (
-
-                  <div className="orbi-no-data"><Icon name="refresh" size={24} /><span>Loading direct referrals from blockchain...</span></div>
-
-                ) : teamMembers.length === 0 ? (
-
-                  <div className="orbi-no-data"><Icon name="team" size={24} /><span>No direct referrals yet.</span></div>
-
-                ) : (
-
-                  <div className="orbi-withdraw-history-wrap">
-
-                    <table className="orbi-withdraw-table">
-
-                      <thead><tr><th>USER ID</th><th>WALLET</th><th>STATUS</th><th>DIRECTS</th><th>ACTIVE DIRECTS</th><th>DIRECT BUSINESS</th><th>RANK</th></tr></thead>
-
-                      <tbody>
-
-                        {teamMembers.map((member) => {
-
-                          const memberActive = member.status === BigInt(USER_STATUS.ACTIVE);
-
-                          const memberBusiness = referralLegBusiness[member.id.toString()];
-
-                          return (
-
-                            <tr key={member.id.toString()}>
-
-                              <td>#{member.id.toString()}</td>
-
-                              <td>{shortAddress(member.wallet)}</td>
-
-                              <td><span className={`orbi-withdraw-status ${memberActive ? "approved" : "rejected"}`}>{statusLabel(member.status)}</span></td>
-
-                              <td>{formatInteger(member.directCount)}</td>
-
-                              <td>{formatInteger(member.activeDirectCount)}</td>
-
-                              <td>{referralBusinessLoading && memberBusiness === undefined ? "Loading..." : `$${formatUsdt(memberBusiness ?? 0n)}`}</td>
-
-                              <td>RANK {member.rank.toString()}</td>
-
-                            </tr>
-
-                          );
-
-                        })}
-
-                      </tbody>
-
-                    </table>
-
-                  </div>
-
-                )}
-
-              </section>
-
-              <section className="orbi-two-column">
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">NETWORK SNAPSHOT</span><h2>Direct activity</h2></div><Icon name="team" size={22} /></div>
-
-                  <div className="orbi-network-grid">
-
-                    <div><span>REGISTERED</span><strong>{formatInteger(user.directCount)}</strong></div>
-
-                    <div><span>ACTIVE</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
-
-                    <div><span>INACTIVE</span><strong>{inactiveDirects}</strong></div>
-
-                    <div><span>TEAM BUSINESS</span><strong>${formatUsdt(user.lifetimeBusiness)}</strong></div>
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-card">
-
-                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">HOW IT WORKS</span><h2>Build your network</h2></div><Icon name="link" size={22} /></div>
-
-                  <div className="orbi-withdraw-lifecycle">
-
-                    <div><span>1</span><div><b>SHARE</b></div></div>
-
-                    <div><span>2</span><div><b>REGISTER</b></div></div>
-
-                    <div><span>3</span><div><b>ACTIVATE</b></div></div>
-
-                  </div>
-
-                </div>
-
-              </section>
-
-            </>
-
-          )}
-
-        </>
-
-      );
-
-    }
-
-    if (activeNav !== "Dashboard") {
-
-      return (
-
-        <section className="orbi-empty-section">
-
-          <div className="orbi-empty-icon">
-
-            <Icon
-
-              name={
-
-                navItems.find((item) => item.label === activeNav)?.icon ??
-
-                utilityItems.find((item) => item.label === activeNav)?.icon ??
-
-                "dashboard"
-
-              }
-
-              size={25}
-
-            />
-
-          </div>
-
-          <h2>{activeNav}</h2>
-
-          <p>
-
-            This module is connected to the same on-chain dashboard foundation.
-
-            We will wire its dedicated contract reads and transactions in the
-
-            next implementation step.
-
-          </p>
-
-        </section>
-
-      );
-
-    }
-
-
-    return (
-
-      <>
-
-        <section className="orbi-welcome">
-
-          <div>
-
-            <div className="orbi-eyebrow">
-
-              <span className="orbi-live-dot" />
-
-              DECENTRALIZED DASHBOARD
-
-            </div>
-
-            <h1>
-
-              Welcome To ORBI WORLD<span>.</span>
-
-            </h1>
-
-            <p>
-
-              Your ORBI WORLD ecosystem overview, powered directly by the
-
-              blockchain.
-
-            </p>
-
-          </div>
-
-          <button className="orbi-refresh-btn" onClick={refresh} disabled={loading}>
-
-            <Icon name="refresh" size={17} />
-
-            {loading ? "Refreshing..." : "Refresh"}
-
-          </button>
-
-        </section>
-
-        {networkError && (
-
-          <div className="orbi-alert orbi-alert-warning">
-
-            <Icon name="alert" size={18} />
-
-            <span>{networkError}</span>
-
-          </div>
-
-        )}
-
-        {error && (
-
-          <div className="orbi-alert">
-
-            <Icon name="alert" size={18} />
-
-            <span>{error}</span>
-
-          </div>
-
-        )}
-
-        {!wallet && (
-
-          <section className="orbi-connect-panel">
-
-            <div className="orbi-connect-art">
-
-              <Icon name="wallet" size={34} />
-
-            </div>
-
-            <div className="orbi-connect-copy">
-
-              <div className="orbi-section-kicker">WALLET REQUIRED</div>
-
-              <h2>Connect your wallet</h2>
-
-              <p>
-
-                Connect the wallet that owns your ORBI WORLD account to load
-
-                your real on-chain dashboard data.
-
-              </p>
-
-            </div>
-
-            <button className="orbi-primary-btn" onClick={connectWallet}>
-
-              <Icon name="wallet" size={18} />
-
-              Connect Wallet
-
-            </button>
-
-          </section>
-
-        )}
-
-        {wallet && (
-
-          <>
-
-            <section className="orbi-wallet-bar">
-
-              <div className="orbi-wallet-left">
-
-                <div className="orbi-wallet-status" />
-
-                <div>
-
-                  <span>CONNECTED WALLET</span>
-
-                  <strong>{shortAddress(wallet)}</strong>
-
-                </div>
-
-              </div>
-
-              <a
-
-                href={`${BLOCK_EXPLORER}/address/${wallet}`}
-
-                target="_blank"
-
-                rel="noreferrer"
-
-                className="orbi-explorer-link"
-
-              >
-
-                View on BscScan
-
-                <Icon name="external" size={15} />
-
-              </a>
-
-            </section>
-
-            <section className="orbi-stat-grid">
-
-              <StatCard
-
-                icon="package"
-
-                label="TOTAL STAKED"
-
-                value={`$${formatUsdt(totalStaked)}`}
-
-              />
-
-              <StatCard
-
-                icon="dashboard"
-
-                label="ACTIVE PACKAGES"
-
-                value={formatInteger(BigInt(activePackages.length))}
-
-              />
-
-              <StatCard
-
-                icon="money"
-
-                label="TOTAL EARNINGS"
-
-                value={`$${formatUsdt(totalEarnings)}`}
-
-              />
-
-              <StatCard
-
-                icon="team"
-
-                label="DIRECT REFERRALS"
-
-                value={formatInteger(user.directCount)}
-
-              />
-
-            </section>
-
-            <section className="orbi-two-column">
-
-              <div className="orbi-card orbi-wallet-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">WALLET OVERVIEW</span>
-
-                    <h2>On-chain balances</h2>
-
-                  </div>
-
-                  <Icon name="wallet" size={22} />
-
-                </div>
-
-                <div className="orbi-balance-grid">
-
-                  <div>
-
-                    <span>MOCUSDT BALANCE</span>
-
-                    <strong>${formatUsdt(usdtBalance)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>BNB BALANCE</span>
-
-                    <strong>{Number(ethers.formatEther(nativeBalance)).toFixed(4)} BNB</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>ACCOUNT STATUS</span>
-
-                    <strong className="orbi-status-text">
-
-                      {statusLabel(user.status)}
-
-                    </strong>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              <div className="orbi-card orbi-income-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">EARNINGS</span>
-
-                    <h2>Income breakdown</h2>
-
-                  </div>
-
-                  <Icon name="money" size={22} />
-
-                </div>
-
-                <div className="orbi-income-list">
-
-                  <IncomeRow label="ROI Income" value={user.totalROIIncome} />
-
-                  <IncomeRow
-
-                    label="Level Income"
-
-                    value={user.totalLevelIncome}
-
-                  />
-
-                  <IncomeRow
-
-                    label="Rank Income"
-
-                    value={user.totalRankIncome}
-
-                  />
-
-                  
-
-                </div>
-
-              </div>
-
-            </section>
-
-            <section className="orbi-card orbi-package-section">
-
-              <div className="orbi-card-head">
-
-                <div>
-
-                  <span className="orbi-section-kicker">STAKING</span>
-
-                  <h2>My Packages</h2>
-
-                </div>
-
-                <div className="orbi-package-summary">
-
-                  <span>ON-CHAIN PAID</span>
-
-                  <strong>${formatUsdt(totalPackagePaid)}</strong>
-
-                </div>
-
-              </div>
-
-              {packages.length === 0 ? (
-
-                <div className="orbi-no-data">
-
-                  <Icon name="package" size={24} />
-
-                  <span>No packages found for this wallet.</span>
-
-                </div>
-
-              ) : (
-
-                <div className="orbi-package-grid">
-
-                  {packages.map((item) => {
-
-                    const threshold = (item.amount * 70n) / 100n;
-
-                    const progress =
-
-                      item.maxPayout > 0n
-
-                        ? Math.min(
-
-                            100,
-
-                            Number(
-
-                              (item.totalPaid * 10000n) / item.maxPayout
-
-                            ) / 100
-
-                          )
-
-                        : 0;
-
-                    const emergencyEligible =
-
-                      item.status === BigInt(PACKAGE_STATUS.ACTIVE) &&
-
-                      item.totalPaid < threshold;
-
-                    return (
-
-                      <article
-
-                        className={`orbi-package-item ${
-
-                          item.status === BigInt(PACKAGE_STATUS.ACTIVE)
-
-                            ? "is-active"
-
-                            : ""
-
-                        }`}
-
-                        key={item.packageId.toString()}
-
-                      >
-
-                        <div className="orbi-package-top">
-
-                          <div>
-
-                            <span>PACKAGE</span>
-
-                            <strong>#{item.packageId.toString()}</strong>
-
-                          </div>
-
-                          <span
-
-                            className={`orbi-package-status ${
-
-                              item.status === BigInt(PACKAGE_STATUS.ACTIVE)
-
-                                ? "active"
-
-                                : "closed"
-
-                            }`}
-
-                          >
-
-                            {packageStatusLabel(
-
-                              item.status,
-
-                              item.emergencyClosed
-
-                            )}
-
-                          </span>
-
-                        </div>
-
-                        <div className="orbi-package-amount">
-
-                          <span>STAKED AMOUNT</span>
-
-                          <strong>${formatUsdt(item.amount)}</strong>
-
-                        </div>
-
-                        <div className="orbi-progress-wrap">
-
-                          <div className="orbi-progress-label">
-
-                            <span>2X PAYOUT PROGRESS</span>
-
-                            <b>{progress.toFixed(1)}%</b>
-
-                          </div>
-
-                          <div className="orbi-progress">
-
-                            <span style={{ width: `${progress}%` }} />
-
-                          </div>
-
-                          <div className="orbi-progress-values">
-
-                            <span>${formatUsdt(item.totalPaid)} paid</span>
-
-                            <span>${formatUsdt(item.maxPayout)} max</span>
-
-                          </div>
-
-                        </div>
-
-                        <div className="orbi-package-stats">
-
-                          <div>
-
-                            <span>ROI PAID</span>
-
-                            <b>${formatUsdt(item.roiPaid)}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>LEVEL PAID</span>
-
-                            <b>${formatUsdt(item.levelPaid)}</b>
-
-                          </div>
-
-                          <div>
-
-                            <span>STARTED</span>
-
-                            <b>{formatDate(item.startTime)}</b>
-
-                          </div>
-
-                        </div>
-
-                        <div
-
-                          className={`orbi-emergency-status ${
-
-                            emergencyEligible ? "eligible" : "locked"
-
-                          }`}
-
-                        >
-
-                          <div>
-
-                            <span>EMERGENCY EXIT</span>
-
-                            <strong>
-
-                              {emergencyEligible ? "ELIGIBLE" : "LOCKED"}
-
-                            </strong>
-
-                          </div>
-
-                          <small>
-
-                            70% threshold: ${formatUsdt(threshold)}
-
-                          </small>
-
-                        </div>
-
-                      </article>
-
-                    );
-
-                  })}
-
-                </div>
-
-              )}
-
-            </section>
-
-            <section className="orbi-two-column">
-
-              <div className="orbi-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">NETWORK</span>
-
-                    <h2>Your network</h2>
-
-                  </div>
-
-                  <Icon name="team" size={22} />
-
-                </div>
-
-                <div className="orbi-network-grid">
-
-                  <div>
-
-                    <span>DIRECTS</span>
-
-                    <strong>{formatInteger(user.directCount)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>ACTIVE DIRECTS</span>
-
-                    <strong>{formatInteger(user.activeDirectCount)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>TEAM BUSINESS</span>
-
-                    <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>POWER LEG</span>
-
-                    <strong>${formatUsdt(user.powerLegBusiness)}</strong>
-
-                  </div>
-
-                  <div>
-
-                    <span>OTHER LEG BUSINESS</span>
-
-                    <strong>${formatUsdt(user.otherLegBusiness)}</strong>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              <div className="orbi-card orbi-rank-card">
-
-                <div className="orbi-card-head">
-
-                  <div>
-
-                    <span className="orbi-section-kicker">ACHIEVEMENT</span>
-
-                    <h2>Rank & Royalty</h2>
-
-                  </div>
-
-                  <Icon name="trophy" size={22} />
-
-                </div>
-
-                <div className="orbi-achievement-row">
-
-                  <div className="orbi-achievement">
-
-                    <span>CURRENT RANK</span>
-
-                    <strong>RANK {user.rank.toString()}</strong>
-
-                  </div>
-
-                  <div className="orbi-achievement">
-
-                    <span>ROYALTY LEVEL</span>
-
-                    <strong>{user.royalty.toString()}</strong>
-
-                  </div>
-
-                </div>
-
-                <div className="orbi-achievement-wallets">
-
-                  <div>
-
-                    <span>RANK WALLET</span>
-
-                    <b>${formatUsdt(user.rankWallet)}</b>
-
-                  </div>
-
-                  <div>
-
-                    <span>ROYALTY WALLET</span>
-
-                    <b>${formatUsdt(user.royaltyWallet)}</b>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-            </section>
-
-            <section className="orbi-card orbi-referral-card">
-
-              <div className="orbi-card-head">
-
-                <div>
-
-                  <span className="orbi-section-kicker">NETWORK GROWTH</span>
-
-                  <h2>Your referral link</h2>
-
-                  <p>Share your wallet-linked referral URL.</p>
-
-                </div>
-
-                <Icon name="link" size={22} />
-
-              </div>
-
-              <div className="orbi-referral-row">
-
-                <div className="orbi-referral-input">
-
-                  <span>{referralLink || "Connect wallet to generate link"}</span>
-
-                </div>
-
-                <button
-
-                  className="orbi-copy-btn"
-
-                  onClick={copyReferral}
-
-                  disabled={!referralLink}
-
-                >
-
-                  <Icon name="copy" size={17} />
-
-                  {copied ? "Copied" : "Copy"}
-
-                </button>
-
-              </div>
-
-            </section>
-
-            <section className="orbi-card orbi-activity-card">
-
-              <div className="orbi-card-head">
-
-                <div>
-
-                  <span className="orbi-section-kicker">ACCOUNT</span>
-
-                  <h2>Activity overview</h2>
-
-                </div>
-
-                <Icon name="activity" size={22} />
-
-              </div>
-
-              <div className="orbi-activity-grid">
-
-                <div>
-
-                  <span>LIFETIME BUSINESS</span>
-
-                  <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>MONTHLY BUSINESS</span>
-
-                  <strong>${formatUsdt(user.monthlyBusiness)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TODAY BUSINESS</span>
-
-                  <strong>${formatUsdt(user.todayBusiness)}</strong>
-
-                </div>
-
-                <div>
-
-                  <span>TOTAL WITHDRAWN</span>
-
-                  <strong>${formatUsdt(user.totalWithdrawn)}</strong>
-
-                </div>
-
-              </div>
-
-              <div className="orbi-activity-foot">
-
-                <span>
-
-                  {emergencyEligiblePackages.length} active package
-
-                  {emergencyEligiblePackages.length === 1 ? "" : "s"} currently
-
-                  below the 70% emergency-exit threshold.
-
-                </span>
-
-                <a
-
-                  href={`${BLOCK_EXPLORER}/address/${wallet}`}
-
-                  target="_blank"
-
-                  rel="noreferrer"
-
-                >
-
-                  Open wallet on explorer
-
-                  <Icon name="external" size={14} />
-
-                </a>
-
-              </div>
-
-            </section>
-
-          </>
-
-        )}
-
-      </>
-
-    );
-
-  };
-
-  return (
-
-    <main className="orbi-dashboard">
-
-      <style jsx global>{`
-
-        .orbi-dashboard {
-
-          --od-bg: #03050a;
-
-          --od-surface: #080d16;
-
-          --od-surface-2: #0d1522;
-
-          --od-border: rgba(63, 115, 176, 0.28);
-
-          --od-border-light: rgba(72, 145, 225, 0.42);
-
-          --od-primary: #168cff;
-
-          --od-primary-soft: #54b4ff;
-
-          --od-purple: #7357ff;
-
-          --od-orange: #ff9d32;
-
-          --od-gold: #ffd166;
-
-          --od-text: #f8fbff;
-
-          --od-muted: #91a5bd;
-
-          --od-muted-2: #637991;
-
-          --od-success: #22c55e;
-
-          --od-danger: #ef4444;
-
-          min-height: 100vh;
-
-          display: flex;
-
-          color: var(--od-text);
-
-          background:
-
-            radial-gradient(circle at 82% 4%, rgba(115, 87, 255, 0.13), transparent 27%),
-
-            radial-gradient(circle at 24% 12%, rgba(22, 140, 255, 0.11), transparent 30%),
-
-            radial-gradient(circle at 62% 88%, rgba(255, 157, 50, 0.045), transparent 24%),
-
-            var(--od-bg);
-
-          font-family: Arial, Helvetica, sans-serif;
-
-        }
-
-        .orbi-sidebar {
-
-          position: fixed;
-
-          inset: 0 auto 0 0;
-
-          z-index: 50;
-
-          width: 250px;
-
-          padding: 22px 14px 18px;
-
-          display: flex;
-
-          flex-direction: column;
-
-          background: linear-gradient(180deg, rgba(5, 9, 16, 0.98), rgba(3, 7, 13, 0.98));
-
-          border-right: 1px solid var(--od-border);
-
-          box-shadow: 14px 0 45px rgba(0, 0, 0, 0.18);
-
-          backdrop-filter: blur(20px);
-
-          -webkit-backdrop-filter: blur(20px);
-
-        }
-
-        .orbi-brand-logo-wrap {
-
-          width: 100%;
-
-          display: flex;
-
-          align-items: center;
-
-        }
-
-        .orbi-brand-logo {
-
-          display: block;
-
-          width: 128px;
-
-          max-width: 100%;
-
-          height: auto;
-
-          object-fit: contain;
-
-        }
-
-        .orbi-brand {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 11px;
-
-          padding: 4px 10px 24px;
-
-          border-bottom: 1px solid rgba(38, 55, 80, 0.55);
-
-          margin-bottom: 15px;
-
-        }
-
-        .orbi-brand-mark {
-
-          width: 38px;
-
-          height: 38px;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 11px;
-
-          background: linear-gradient(135deg, var(--od-primary), var(--od-purple), var(--od-orange));
-
-          box-shadow: 0 0 26px rgba(22, 140, 255, 0.2);
-
-          font-size: 14px;
-
-          font-weight: 900;
-
-          color: #fff;
-
-        }
-
-        .orbi-brand-name {
-
-          font-size: 16px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.08em;
-
-        }
-
-        .orbi-brand-sub {
-
-          margin-top: 3px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          letter-spacing: 0.15em;
-
-          font-weight: 700;
-
-        }
-
-        .orbi-nav {
-
-          display: flex;
-
-          flex-direction: column;
-
-          gap: 4px;
-
-          overflow-y: auto;
-
-          padding-right: 2px;
-
-        }
-
-        .orbi-nav-button {
-
-          width: 100%;
-
-          min-height: 43px;
-
-          border: 1px solid transparent;
-
-          border-radius: 11px;
-
-          background: transparent;
-
-          color: var(--od-muted);
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 12px;
-
-          padding: 0 12px;
-
-          text-align: left;
-
-          transition: 180ms ease;
-
-        }
-
-        .orbi-nav-button:hover {
-
-          color: #fff;
-
-          background: linear-gradient(90deg, rgba(22, 140, 255, 0.08), rgba(115, 87, 255, 0.035));
-
-          border-color: rgba(22, 140, 255, 0.16);
-
-        }
-
-        .orbi-nav-button.active {
-
-          color: #fff;
-
-          background: linear-gradient(90deg, rgba(22, 140, 255, 0.17), rgba(115, 87, 255, 0.10));
-
-          border-color: rgba(22, 140, 255, 0.34);
-
-          box-shadow: inset 3px 0 0 var(--od-primary), 0 8px 24px rgba(22, 140, 255, 0.06);
-
-        }
-
-        .orbi-nav-button.danger {
-
-          color: #d38a8a;
-
-        }
-
-        .orbi-nav-button.danger.active,
-
-        .orbi-nav-button.danger:hover {
-
-          color: #fff;
-
-          border-color: rgba(239, 68, 68, 0.18);
-
-          background: rgba(239, 68, 68, 0.06);
-
-          box-shadow: inset 2px 0 0 var(--od-danger);
-
-        }
-
-        .orbi-nav-divider {
-
-          height: 1px;
-
-          background: rgba(38, 55, 80, 0.55);
-
-          margin: 12px 8px;
-
-        }
-
-        .orbi-sidebar-bottom {
-
-          margin-top: auto;
-
-          padding-top: 12px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          line-height: 1.5;
-
-          letter-spacing: 0.08em;
-
-        }
-
-        .orbi-mobile-top {
-
-          display: none;
-
-        }
-
-        .orbi-main {
-
-          width: calc(100% - 250px);
-
-          margin-left: 250px;
-
-          min-height: 100vh;
-
-          padding: 34px 38px 50px;
-
-        }
-
-        .orbi-main-inner {
-
-          width: min(100%, 1420px);
-
-          margin: 0 auto;
-
-        }
-
-        .orbi-welcome {
-
-          display: flex;
-
-          justify-content: space-between;
-
-          align-items: flex-end;
-
-          gap: 20px;
-
-          margin-bottom: 25px;
-
-        }
-
-        .orbi-eyebrow,
-
-        .orbi-section-kicker {
-
-          color: var(--od-muted-2);
-
-          font-size: 10px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.17em;
-
-        }
-
-        .orbi-eyebrow {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 7px;
-
-          margin-bottom: 10px;
-
-        }
-
-        .orbi-live-dot {
-
-          width: 7px;
-
-          height: 7px;
-
-          border-radius: 50%;
-
-          background: var(--od-success);
-
-          box-shadow: 0 0 12px rgba(34, 197, 94, 0.7);
-
-        }
-
-        .orbi-welcome h1 {
-
-          margin: 0;
-
-          font-size: clamp(30px, 3vw, 44px);
-
-          line-height: 1;
-
-          letter-spacing: -0.04em;
-
-        }
-
-        .orbi-welcome h1 span {
-
-          color: var(--od-primary);
-
-        }
-
-        .orbi-welcome p {
-
-          margin: 10px 0 0;
-
-          max-width: 600px;
-
-          color: var(--od-muted);
-
-          font-size: 14px;
-
-          line-height: 1.6;
-
-        }
-
-        .orbi-refresh-btn,
-
-        .orbi-primary-btn,
-
-        .orbi-copy-btn {
-
-          border: 1px solid var(--od-border-light);
-
-          color: #fff;
-
-          background: rgba(14, 21, 34, 0.9);
-
-          border-radius: 11px;
-
-          min-height: 42px;
-
-          padding: 0 15px;
-
-          display: inline-flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          gap: 8px;
-
-          font-weight: 700;
-
-          transition: 180ms ease;
-
-        }
-
-        .orbi-refresh-btn:hover,
-
-        .orbi-copy-btn:hover {
-
-          border-color: rgba(22, 140, 255, 0.45);
-
-          background: rgba(22, 140, 255, 0.08);
-
-        }
-
-        .orbi-refresh-btn:disabled,
-
-        .orbi-copy-btn:disabled,
-
-        .orbi-primary-btn:disabled {
-
-          opacity: 0.55;
-
-          cursor: not-allowed;
-
-        }
-
-        .orbi-primary-btn {
-
-          border-color: rgba(22, 140, 255, 0.5);
-
-          background: linear-gradient(135deg, #168cff 0%, #4d72ff 52%, #7357ff 100%);
-
-          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.18), 0 4px 18px rgba(115, 87, 255, 0.10);
-
-        }
-
-        .orbi-primary-btn:hover {
-
-          transform: translateY(-1px);
-
-          box-shadow: 0 15px 36px rgba(22, 140, 255, 0.22);
-
-        }
-
-        .orbi-alert {
-
-          min-height: 48px;
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 10px;
-
-          margin-bottom: 18px;
-
-          padding: 0 15px;
-
-          border: 1px solid rgba(239, 68, 68, 0.25);
-
-          border-radius: 12px;
-
-          background: rgba(239, 68, 68, 0.055);
-
-          color: #fca5a5;
-
-          font-size: 13px;
-
-        }
-
-        .orbi-alert-warning {
-
-          border-color: rgba(255, 157, 50, 0.25);
-
-          background: rgba(255, 157, 50, 0.05);
-
-          color: #fdba74;
-
-        }
-
-        .orbi-connect-panel,
-
-        .orbi-wallet-bar,
-
-        .orbi-card {
-
-          border: 1px solid var(--od-border);
-
-          background: linear-gradient(145deg, rgba(10, 16, 27, 0.88), rgba(6, 11, 19, 0.82));
-
-          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.015);
-
-          backdrop-filter: blur(16px);
-
-          -webkit-backdrop-filter: blur(16px);
-
-        }
-
-        .orbi-connect-panel {
-
-          min-height: 150px;
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 20px;
-
-          padding: 24px;
-
-          border-radius: 18px;
-
-          margin-bottom: 22px;
-
-        }
-
-        .orbi-connect-art {
-
-          width: 64px;
-
-          height: 64px;
-
-          flex: 0 0 64px;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 17px;
-
-          color: #fff;
-
-          background: linear-gradient(135deg, rgba(22, 140, 255, 0.16), rgba(115, 87, 255, 0.13));
-
-          border: 1px solid rgba(22, 140, 255, 0.2);
-
-        }
-
-        .orbi-connect-copy {
-
-          flex: 1;
-
-        }
-
-        .orbi-connect-copy h2 {
-
-          margin: 5px 0 6px;
-
-          font-size: 20px;
-
-        }
-
-        .orbi-connect-copy p {
-
-          margin: 0;
-
-          color: var(--od-muted);
-
-          font-size: 13px;
-
-          line-height: 1.6;
-
-        }
-
-        .orbi-wallet-bar {
-
-          min-height: 58px;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          gap: 15px;
-
-          padding: 0 16px;
-
-          margin-bottom: 14px;
-
-          border-radius: 13px;
-
-        }
-
-        .orbi-wallet-left {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 10px;
-
-        }
-
-        .orbi-wallet-status {
-
-          width: 8px;
-
-          height: 8px;
-
-          border-radius: 50%;
-
-          background: var(--od-success);
-
-          box-shadow: 0 0 13px rgba(34, 197, 94, 0.75);
-
-        }
-
-        .orbi-wallet-left span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.14em;
-
-        }
-
-        .orbi-wallet-left strong {
-
-          display: block;
-
-          margin-top: 2px;
-
-          font-size: 13px;
-
-        }
-
-        .orbi-explorer-link,
-
-        .orbi-activity-foot a {
-
-          color: #9bcfff;
-
-          display: inline-flex;
-
-          align-items: center;
-
-          gap: 6px;
-
-          font-size: 11px;
-
-          font-weight: 700;
-
-        }
-
-        .orbi-stat-grid {
-
-          display: grid;
-
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-
-          gap: 13px;
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-stat {
-
-          min-height: 145px;
-
-          padding: 18px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 15px;
-
-          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
-
-          position: relative;
-
-          overflow: hidden;
-
-        }
-
-        .orbi-stat::after {
-
-          content: "";
-
-          position: absolute;
-
-          width: 100px;
-
-          height: 100px;
-
-          right: -45px;
-
-          top: -45px;
-
-          border-radius: 50%;
-
-          background: rgba(22, 140, 255, 0.08);
-
-          filter: blur(10px);
-
-        }
-
-        .orbi-stat-icon {
-
-          width: 37px;
-
-          height: 37px;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 10px;
-
-          color: #9bcfff;
-
-          background: linear-gradient(135deg, rgba(22, 140, 255, 0.12), rgba(115, 87, 255, 0.07));
-
-          border: 1px solid rgba(22, 140, 255, 0.20);
-
-          margin-bottom: 18px;
-
-        }
-
-        .orbi-stat-label {
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.15em;
-
-        }
-
-        .orbi-stat-value {
-
-          margin-top: 6px;
-
-          font-size: 25px;
-
-          font-weight: 800;
-
-          letter-spacing: -0.03em;
-
-        }
-
-        .orbi-stat-meta {
-
-          margin-top: 5px;
-
-          color: var(--od-muted);
-
-          font-size: 10px;
-
-        }
-
-        .orbi-two-column {
-
-          display: grid;
-
-          grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr);
-
-          gap: 14px;
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-card {
-
-          border-radius: 16px;
-
-          padding: 20px;
-
-        }
-
-        .orbi-card-head {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          justify-content: space-between;
-
-          gap: 15px;
-
-          margin-bottom: 18px;
-
-        }
-
-        .orbi-card-head > svg,
-
-        .orbi-card-head > div:last-child > svg {
-
-          color: #6fbaff;
-
-        }
-
-        .orbi-card h2 {
-
-          margin: 5px 0 0;
-
-          font-size: 18px;
-
-          letter-spacing: -0.02em;
-
-        }
-
-        .orbi-card-head p {
-
-          margin: 6px 0 0;
-
-          color: var(--od-muted);
-
-          font-size: 11px;
-
-          line-height: 1.5;
-
-        }
-
-        .orbi-balance-grid {
-
-          display: grid;
-
-          grid-template-columns: repeat(2, 1fr);
-
-          gap: 10px;
-
-        }
-
-        .orbi-balance-grid > div,
-
-        .orbi-network-grid > div,
-
-        .orbi-activity-grid > div {
-
-          min-height: 78px;
-
-          padding: 13px;
-
-          border: 1px solid rgba(38, 55, 80, 0.65);
-
-          border-radius: 12px;
-
-          background: rgba(14, 21, 34, 0.48);
-
-        }
-
-        .orbi-balance-grid span,
-
-        .orbi-network-grid span,
-
-        .orbi-activity-grid span,
-
-        .orbi-package-stats span,
-
-        .orbi-achievement span,
-
-        .orbi-achievement-wallets span,
-
-        .orbi-package-amount span,
-
-        .orbi-package-top span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-balance-grid strong,
-
-        .orbi-network-grid strong,
-
-        .orbi-activity-grid strong {
-
-          display: block;
-
-          margin-top: 7px;
-
-          font-size: 15px;
-
-        }
-
-        .orbi-status-text {
-
-          color: var(--od-success) !important;
-
-          font-size: 12px !important;
-
-        }
-
-        .orbi-income-list {
-
-          display: flex;
-
-          flex-direction: column;
-
-        }
-
-        .orbi-income-row {
-
-          min-height: 45px;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          gap: 12px;
-
-          border-bottom: 1px solid rgba(38, 55, 80, 0.55);
-
-        }
-
-        .orbi-income-row:last-child {
-
-          border-bottom: 0;
-
-        }
-
-        .orbi-income-row span {
-
-          color: var(--od-muted);
-
-          font-size: 12px;
-
-        }
-
-        .orbi-income-row strong {
-
-          font-size: 13px;
-
-        }
-
-        .orbi-package-section {
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-package-summary {
-
-          text-align: right;
-
-        }
-
-        .orbi-package-summary span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-package-summary strong {
-
-          display: block;
-
-          margin-top: 5px;
-
-          font-size: 18px;
-
-        }
-
-        .orbi-package-grid {
-
-          display: grid;
-
-          grid-template-columns: minmax(0, 1fr);
-
-          gap: 12px;
-
-        }
-
-        .orbi-package-item {
-
-          padding: 17px;
-
-          border: 1px solid rgba(38, 55, 80, 0.75);
-
-          border-radius: 14px;
-
-          background: rgba(6, 10, 17, 0.55);
-
-        }
-
-        .orbi-package-item.is-active {
-
-          border-color: rgba(22, 140, 255, 0.25);
-
-          box-shadow: inset 0 1px 0 rgba(22, 140, 255, 0.08);
-
-        }
-
-        .orbi-package-top {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          justify-content: space-between;
-
-          gap: 10px;
-
-        }
-
-        .orbi-package-top strong {
-
-          display: block;
-
-          margin-top: 5px;
-
-          font-size: 15px;
-
-        }
-
-        .orbi-package-status {
-
-          padding: 5px 8px;
-
-          border-radius: 999px;
-
-          font-size: 7px;
-
-          font-weight: 900;
-
-          letter-spacing: 0.1em;
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-package-status.active {
-
-          color: #86efac;
-
-          background: rgba(34, 197, 94, 0.08);
-
-          border: 1px solid rgba(34, 197, 94, 0.16);
-
-        }
-
-        .orbi-package-status.closed {
-
-          color: #aebbd0;
-
-          background: rgba(139, 155, 176, 0.08);
-
-          border: 1px solid rgba(139, 155, 176, 0.13);
-
-        }
-
-        .orbi-package-amount {
-
-          margin-top: 21px;
-
-        }
-
-        .orbi-package-amount strong {
-
-          display: block;
-
-          margin-top: 4px;
-
-          font-size: 26px;
-
-          letter-spacing: -0.04em;
-
-        }
-
-        .orbi-progress-wrap {
-
-          margin-top: 19px;
-
-        }
-
-        .orbi-progress-label,
-
-        .orbi-progress-values {
-
-          display: flex;
-
-          justify-content: space-between;
-
-          gap: 10px;
-
-        }
-
-        .orbi-progress-label {
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.11em;
-
-        }
-
-        .orbi-progress-label b {
-
-          color: #b8d9ff;
-
-          font-size: 9px;
-
-          letter-spacing: 0;
-
-        }
-
-        .orbi-progress {
-
-          height: 6px;
-
-          margin-top: 8px;
-
-          overflow: hidden;
-
-          border-radius: 999px;
-
-          background: #182333;
-
-        }
-
-        .orbi-progress span {
-
-          display: block;
-
-          height: 100%;
-
-          border-radius: inherit;
-
-          background: linear-gradient(90deg, var(--od-primary), var(--od-purple), var(--od-orange));
-
-          box-shadow: 0 0 15px rgba(22, 140, 255, 0.35);
-
-        }
-
-        .orbi-progress-values {
-
-          margin-top: 6px;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-        }
-
-        .orbi-package-stats {
-
-          display: grid;
-
-          grid-template-columns: repeat(3, 1fr);
-
-          gap: 8px;
-
-          margin-top: 18px;
-
-        }
-
-        .orbi-package-stats > div {
-
-          padding: 9px;
-
-          border-radius: 9px;
-
-          background: rgba(14, 21, 34, 0.7);
-
-        }
-
-        .orbi-package-stats b {
-
-          display: block;
-
-          margin-top: 5px;
-
-          font-size: 10px;
-
-        }
-
-        .orbi-emergency-status {
-
-          margin-top: 12px;
-
-          padding: 10px 11px;
-
-          border-radius: 10px;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          gap: 10px;
-
-        }
-
-        .orbi-emergency-status.eligible {
-
-          color: #bbf7d0;
-
-          border: 1px solid rgba(34, 197, 94, 0.18);
-
-          background: rgba(34, 197, 94, 0.05);
-
-        }
-
-        .orbi-emergency-status.locked {
-
-          color: #cbd5e1;
-
-          border: 1px solid rgba(139, 155, 176, 0.12);
-
-          background: rgba(139, 155, 176, 0.045);
-
-        }
-
-        .orbi-emergency-status span {
-
-          display: block;
-
-          font-size: 7px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-          opacity: 0.7;
-
-        }
-
-        .orbi-emergency-status strong {
-
-          display: block;
-
-          margin-top: 3px;
-
-          font-size: 10px;
-
-        }
-
-        .orbi-emergency-status small {
-
-          color: var(--od-muted);
-
-          font-size: 8px;
-
-          text-align: right;
-
-        }
-
-        .orbi-network-grid,
-
-        .orbi-activity-grid {
-
-          display: grid;
-
-          grid-template-columns: repeat(2, 1fr);
-
-          gap: 10px;
-
-        }
-
-        .orbi-achievement-row {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 10px;
-
-        }
-
-        .orbi-achievement {
-
-          padding: 14px;
-
-          border-radius: 12px;
-
-          border: 1px solid rgba(38, 55, 80, 0.65);
-
-          background: linear-gradient(135deg, rgba(22, 140, 255, 0.07), rgba(115, 87, 255, 0.04));
-
-        }
-
-        .orbi-achievement strong {
-
-          display: block;
-
-          margin-top: 7px;
-
-          font-size: 15px;
-
-        }
-
-        .orbi-achievement-wallets {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 10px;
-
-          margin-top: 10px;
-
-        }
-
-        .orbi-achievement-wallets > div {
-
-          padding: 11px 13px;
-
-          border-top: 1px solid rgba(38, 55, 80, 0.5);
-
-        }
-
-        .orbi-achievement-wallets b {
-
-          display: block;
-
-          margin-top: 5px;
-
-          font-size: 12px;
-
-        }
-
-        .orbi-referral-card,
-
-        .orbi-activity-card {
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-referral-row {
-
-          display: flex;
-
-          gap: 10px;
-
-        }
-
-        .orbi-referral-input {
-
-          flex: 1;
-
-          min-width: 0;
-
-          height: 45px;
-
-          display: flex;
-
-          align-items: center;
-
-          padding: 0 13px;
-
-          border: 1px solid rgba(38, 55, 80, 0.75);
-
-          border-radius: 10px;
-
-          background: rgba(3, 5, 8, 0.55);
-
-          overflow: hidden;
-
-        }
-
-        .orbi-referral-input span {
-
-          overflow: hidden;
-
-          text-overflow: ellipsis;
-
-          white-space: nowrap;
-
-          color: var(--od-muted);
-
-          font-size: 11px;
-
-        }
-
-        .orbi-activity-foot {
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          gap: 15px;
-
-          margin-top: 14px;
-
-          padding-top: 13px;
-
-          border-top: 1px solid rgba(38, 55, 80, 0.55);
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-        }
-
-        .orbi-package-overview-grid {
-
-          display: grid;
-
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-
-          gap: 12px;
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-package-overview-grid > div {
-
-          min-height: 108px;
-
-          padding: 15px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 14px;
-
-          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
-
-        }
-
-        .orbi-package-overview-grid span,
-
-        .orbi-package-detail-row span,
-
-        .orbi-package-meta-grid span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-package-overview-grid strong {
-
-          display: block;
-
-          margin-top: 9px;
-
-          font-size: 22px;
-
-          letter-spacing: -0.03em;
-
-        }
-
-        .orbi-package-overview-grid small {
-
-          display: block;
-
-          margin-top: 5px;
-
-          color: var(--od-muted);
-
-          font-size: 9px;
-
-        }
-
-        .orbi-package-grid-page {
-
-          grid-template-columns: minmax(0, 1fr);
-
-        }
-
-        .orbi-package-page-item {
-
-          min-width: 0;
-
-        }
-
-        .orbi-package-detail-row {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 8px;
-
-          margin-top: 14px;
-
-        }
-
-        .orbi-package-detail-row > div,
-
-        .orbi-package-meta-grid > div {
-
-          padding: 9px 10px;
-
-          border-radius: 9px;
-
-          background: rgba(14, 21, 34, 0.7);
-
-        }
-
-        .orbi-package-detail-row b,
-
-        .orbi-package-meta-grid b {
-
-          display: block;
-
-          margin-top: 5px;
-
-          color: #d9e6f7;
-
-          font-size: 10px;
-
-        }
-
-        .orbi-package-meta-grid {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 8px;
-
-          margin-top: 10px;
-
-        }
-
-        .orbi-packages-page .orbi-no-data {
-
-          min-height: 230px;
-
-        }
-
-        .orbi-no-data,
-
-        .orbi-withdraw-form {
-
-          display: grid;
-
-          gap: 16px;
-
-        }
-
-        .orbi-withdraw-form select {
-
-          width: 100%;
-
-          min-height: 46px;
-
-          padding: 0 13px;
-
-          border: 1px solid var(--od-border-light);
-
-          border-radius: 10px;
-
-          color: var(--od-text);
-
-          background: #060a11;
-
-          outline: none;
-
-        }
-
-        .orbi-withdraw-preview {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 10px;
-
-        }
-
-        .orbi-withdraw-preview > div,
-
-        .orbi-withdraw-rules > div {
-
-          padding: 12px;
-
-          border: 1px solid rgba(38, 55, 80, 0.7);
-
-          border-radius: 10px;
-
-          background: rgba(8, 13, 21, 0.72);
-
-        }
-
-        .orbi-withdraw-preview span,
-
-        .orbi-withdraw-rules span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: .1em;
-
-        }
-
-        .orbi-withdraw-preview strong,
-
-        .orbi-withdraw-rules b {
-
-          display: block;
-
-          margin-top: 6px;
-
-          font-size: 14px;
-
-        }
-
-        .orbi-withdraw-rules {
-
-          display: grid;
-
-          grid-template-columns: repeat(3, 1fr);
-
-          gap: 8px;
-
-        }
-
-        .orbi-withdraw-lifecycle {
-
-          display: grid;
-
-          gap: 12px;
-
-        }
-
-        .orbi-withdraw-lifecycle > div {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          gap: 11px;
-
-          padding: 12px;
-
-          border: 1px solid rgba(38, 55, 80, .65);
-
-          border-radius: 11px;
-
-          background: rgba(8, 13, 21, .55);
-
-        }
-
-        .orbi-withdraw-lifecycle > div > span {
-
-          width: 27px;
-
-          height: 27px;
-
-          flex: 0 0 27px;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 50%;
-
-          color: #9bcfff;
-
-          background: rgba(22, 140, 255, .1);
-
-          border: 1px solid rgba(22, 140, 255, .18);
-
-          font-size: 11px;
-
-          font-weight: 900;
-
-        }
-
-        .orbi-withdraw-lifecycle b {
-
-          display: block;
-
-          color: #eef4fb;
-
-          font-size: 11px;
-
-          letter-spacing: .06em;
-
-        }
-
-        .orbi-withdraw-lifecycle small {
-
-          display: block;
-
-          margin-top: 4px;
-
-          color: var(--od-muted);
-
-          font-size: 10px;
-
-          line-height: 1.45;
-
-        }
-
-        .orbi-withdraw-pending {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          gap: 10px;
-
-          margin-top: 16px;
-
-          padding: 12px;
-
-          border: 1px solid rgba(245, 196, 81, .2);
-
-          border-radius: 11px;
-
-          color: #ffd76d;
-
-          background: rgba(245, 196, 81, .05);
-
-        }
-
-        .orbi-withdraw-pending b,
-
-        .orbi-withdraw-pending span {
-
-          display: block;
-
-        }
-
-        .orbi-withdraw-pending b { font-size: 11px; }
-
-        .orbi-withdraw-pending span { margin-top: 3px; color: var(--od-muted); font-size: 10px; line-height: 1.45; }
-
-        .orbi-withdraw-history-wrap {
-
-          width: 100%;
-
-          overflow-x: auto;
-
-          border: 1px solid rgba(38, 55, 80, .65);
-
-          border-radius: 12px;
-
-        }
-
-        .orbi-withdraw-table {
-
-          width: 100%;
-
-          min-width: 820px;
-
-          border-collapse: collapse;
-
-        }
-
-        .orbi-withdraw-table th {
-
-          padding: 12px 13px;
-
-          text-align: left;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: .12em;
-
-          background: rgba(14, 21, 34, .68);
-
-          border-bottom: 1px solid rgba(38, 55, 80, .65);
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-withdraw-table td {
-
-          padding: 13px;
-
-          color: #b8c7d9;
-
-          font-size: 11px;
-
-          border-bottom: 1px solid rgba(38, 55, 80, .42);
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-withdraw-table tbody tr:last-child td { border-bottom: 0; }
-
-        .orbi-withdraw-status {
-
-          display: inline-flex;
-
-          padding: 5px 8px;
-
-          border-radius: 999px;
-
-          font-size: 8px;
-
-          font-weight: 900;
-
-          letter-spacing: .08em;
-
-        }
-
-        .orbi-withdraw-status.pending {
-
-          color: #ffd76d;
-
-          background: rgba(245, 196, 81, .08);
-
-          border: 1px solid rgba(245, 196, 81, .15);
-
-        }
-
-        .orbi-withdraw-status.approved {
-
-          color: #86efac;
-
-          background: rgba(34, 197, 94, .08);
-
-          border: 1px solid rgba(34, 197, 94, .15);
-
-        }
-
-        .orbi-withdraw-status.rejected {
-
-          color: #ff9b9b;
-
-          background: rgba(239, 68, 68, .08);
-
-          border: 1px solid rgba(239, 68, 68, .15);
-
-        }
-
-        .orbi-empty-section {
-
-          min-height: 150px;
-
-          display: flex;
-
-          flex-direction: column;
-
-          align-items: center;
-
-          justify-content: center;
-
-          gap: 9px;
-
-          color: var(--od-muted);
-
-          text-align: center;
-
-        }
-
-        .orbi-no-data {
-
-          border: 1px dashed rgba(38, 55, 80, 0.75);
-
-          border-radius: 13px;
-
-        }
-
-        .orbi-level-section {
-
-          overflow: hidden;
-
-        }
-
-        .orbi-level-system-pill {
-
-          flex: 0 0 auto;
-
-          padding: 7px 10px;
-
-          border-radius: 999px;
-
-          font-size: 8px;
-
-          font-weight: 900;
-
-          letter-spacing: .12em;
-
-          border: 1px solid rgba(139,155,176,.16);
-
-          background: rgba(139,155,176,.06);
-
-          color: var(--od-muted);
-
-        }
-
-        .orbi-level-system-pill.is-on {
-
-          color: #86efac;
-
-          border-color: rgba(34,197,94,.2);
-
-          background: rgba(34,197,94,.07);
-
-        }
-
-        .orbi-level-table-wrap,
-
-        .orbi-level-history-wrap {
-
-          width: 100%;
-
-          overflow-x: auto;
-
-          border: 1px solid rgba(38,55,80,.65);
-
-          border-radius: 12px;
-
-        }
-
-        .orbi-level-table {
-
-          width: 100%;
-
-          min-width: 760px;
-
-          border-collapse: collapse;
-
-        }
-
-        .orbi-level-table th {
-
-          padding: 12px 13px;
-
-          text-align: left;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: .12em;
-
-          background: rgba(14,21,34,.68);
-
-          border-bottom: 1px solid rgba(38,55,80,.65);
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-level-table td {
-
-          padding: 13px;
-
-          color: #b8c7d9;
-
-          font-size: 11px;
-
-          border-bottom: 1px solid rgba(38,55,80,.42);
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-level-table tbody tr:last-child td {
-
-          border-bottom: 0;
-
-        }
-
-        .orbi-level-table tbody tr.is-unlocked {
-
-          background: rgba(22,140,255,.035);
-
-        }
-
-        .orbi-level-table td strong {
-
-          color: #eef4fb;
-
-        }
-
-        .orbi-level-status {
-
-          display: inline-flex;
-
-          align-items: center;
-
-          gap: 7px;
-
-          padding: 5px 8px;
-
-          border-radius: 999px;
-
-          font-size: 8px;
-
-          font-weight: 900;
-
-          letter-spacing: .08em;
-
-        }
-
-        .orbi-level-status > span {
-
-          width: 6px;
-
-          height: 6px;
-
-          border-radius: 50%;
-
-          display: inline-block;
-
-        }
-
-        .orbi-level-status.unlocked {
-
-          color: #86efac;
-
-          background: rgba(34,197,94,.08);
-
-          border: 1px solid rgba(34,197,94,.15);
-
-        }
-
-        .orbi-level-status.unlocked > span {
-
-          background: #22c55e;
-
-          box-shadow: 0 0 8px rgba(34,197,94,.55);
-
-        }
-
-        .orbi-level-status.locked {
-
-          color: #8fa0b5;
-
-          background: rgba(139,155,176,.06);
-
-          border: 1px solid rgba(139,155,176,.12);
-
-        }
-
-        .orbi-level-status.locked > span {
-
-          background: #718096;
-
-        }
-
-        .orbi-level-history-wrap {
-
-          max-height: 520px;
-
-          overflow-y: auto;
-
-        }
-
-        .orbi-level-history-wrap .orbi-level-table thead th {
-
-          position: sticky;
-
-          top: 0;
-
-          z-index: 2;
-
-        }
-
-        .orbi-empty-section {
-
-          min-height: 420px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 18px;
-
-          background: rgba(10, 15, 24, 0.7);
-
-          padding: 40px;
-
-        }
-
-        .orbi-empty-icon {
-
-          width: 58px;
-
-          height: 58px;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 16px;
-
-          color: #8fc9ff;
-
-          background: rgba(22, 140, 255, 0.08);
-
-          border: 1px solid rgba(22, 140, 255, 0.15);
-
-        }
-
-        .orbi-empty-section h2 {
-
-          margin: 4px 0 0;
-
-        }
-
-        .orbi-empty-section p {
-
-          max-width: 520px;
-
-          margin: 0;
-
-          color: var(--od-muted);
-
-          font-size: 13px;
-
-          line-height: 1.6;
-
-        }
-
-        @media (max-width: 1180px) {
-
-          .orbi-package-overview-grid {
-
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-
-          }
-
-          .orbi-package-grid-page {
-
-            grid-template-columns: minmax(0, 1fr);
-
-          }
-
-          .orbi-stat-grid {
-
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-
-          }
-
-          .orbi-package-grid {
-
-            grid-template-columns: minmax(0, 1fr);
-
-          }
-
-          .orbi-two-column {
-
-            grid-template-columns: 1fr;
-
-          }
-
-        }
-
-        @media (max-width: 850px) {
-
-          .orbi-emergency-overview {
-
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-
-          }
-
-          .orbi-emergency-package {
-
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-
-          }
-
-          .orbi-emergency-package-badge {
-
-            justify-self: start;
-
-          }
-
-          .orbi-sidebar {
-
-            transform: translateX(-100%);
-
-            transition: transform 220ms ease;
-
-            box-shadow: 20px 0 50px rgba(0, 0, 0, 0.3);
-
-          }
-
-          .orbi-sidebar.open {
-
-            transform: translateX(0);
-
-          }
-
-          .orbi-mobile-top {
-
-            position: sticky;
-
-            top: 0;
-
-            z-index: 40;
-
-            height: 64px;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: space-between;
-
-            padding: 0 15px;
-
-            margin: -1px -1px 22px;
-
-            border-bottom: 1px solid var(--od-border);
-
-            background: rgba(3, 5, 8, 0.92);
-
-            backdrop-filter: blur(18px);
-
-            box-shadow: 0 10px 30px rgba(0,0,0,0.16);
-
-          }
-
-          .orbi-mobile-brand {
-
-            font-size: 13px;
-
-            font-weight: 800;
-
-            letter-spacing: 0.12em;
-
-          }
-
-          .orbi-mobile-menu {
-
-            width: 40px;
-
-            height: 40px;
-
-            display: grid;
-
-            place-items: center;
-
-            border: 1px solid var(--od-border);
-
-            border-radius: 10px;
-
-            background: rgba(14, 21, 34, 0.9);
-
-            color: #fff;
-
-          }
-
-          .orbi-main {
-
-            width: 100%;
-
-            margin-left: 0;
-
-            padding: 0 16px 35px;
-
-          }
-
-          .orbi-welcome {
-
-            align-items: flex-start;
-
-            flex-direction: column;
-
-          }
-
-        }
-
-        .orbi-package-actions {
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: flex-end;
-
-          gap: 10px;
-
-          flex-wrap: wrap;
-
-        }
-
-        .orbi-stake-btn {
-
-          min-height: 46px;
-
-          border: 1px solid rgba(115, 87, 255, 0.35);
-
-          border-radius: 12px;
-
-          padding: 0 18px;
-
-          display: inline-flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          gap: 9px;
-
-          color: #fff;
-
-          font-weight: 800;
-
-          background: linear-gradient(135deg, #168cff, #7357ff);
-
-          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.18);
-
-          cursor: pointer;
-
-          transition: 180ms ease;
-
-        }
-
-        .orbi-stake-btn:hover:not(:disabled) {
-
-          transform: translateY(-1px);
-
-          box-shadow: 0 16px 36px rgba(22, 140, 255, 0.25);
-
-        }
-
-        .orbi-stake-btn:disabled {
-
-          opacity: 0.55;
-
-          cursor: not-allowed;
-
-        }
-
-        .orbi-emergency-eyebrow {
-
-          color: #ff9b9b;
-
-        }
-
-        .orbi-emergency-dot {
-
-          width: 7px;
-
-          height: 7px;
-
-          border-radius: 50%;
-
-          background: var(--od-danger);
-
-          box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
-
-        }
-
-        .orbi-emergency-art {
-
-          color: #ffb0b0;
-
-          background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(115, 87, 255, 0.08));
-
-          border-color: rgba(239, 68, 68, 0.2);
-
-        }
-
-        .orbi-emergency-overview {
-
-          display: grid;
-
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-
-          gap: 12px;
-
-          margin-bottom: 14px;
-
-        }
-
-        .orbi-emergency-overview > div {
-
-          min-height: 112px;
-
-          padding: 15px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 14px;
-
-          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
-
-        }
-
-        .orbi-emergency-overview span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-emergency-overview strong {
-
-          display: block;
-
-          margin-top: 9px;
-
-          font-size: 22px;
-
-          letter-spacing: -0.03em;
-
-        }
-
-        .orbi-emergency-overview small {
-
-          display: block;
-
-          margin-top: 5px;
-
-          color: var(--od-muted);
-
-          font-size: 9px;
-
-          line-height: 1.4;
-
-        }
-
-        .orbi-emergency-status-value.eligible {
-
-          color: #fca5a5;
-
-        }
-
-        .orbi-emergency-action-card {
-
-          border-color: rgba(239, 68, 68, 0.2);
-
-          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(239, 68, 68, 0.06);
-
-        }
-
-        .orbi-emergency-warning {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          gap: 11px;
-
-          padding: 13px;
-
-          border: 1px solid rgba(239, 68, 68, 0.22);
-
-          border-radius: 12px;
-
-          color: #fecaca;
-
-          background: rgba(239, 68, 68, 0.055);
-
-        }
-
-        .orbi-emergency-warning svg {
-
-          flex: 0 0 auto;
-
-          margin-top: 1px;
-
-        }
-
-        .orbi-emergency-warning strong,
-
-        .orbi-emergency-warning span {
-
-          display: block;
-
-        }
-
-        .orbi-emergency-warning strong {
-
-          font-size: 12px;
-
-        }
-
-        .orbi-emergency-warning span {
-
-          margin-top: 3px;
-
-          color: #d7a4a4;
-
-          font-size: 10px;
-
-          line-height: 1.45;
-
-        }
-
-        .orbi-emergency-rules {
-
-          display: grid;
-
-          gap: 8px;
-
-          margin-top: 14px;
-
-        }
-
-        .orbi-emergency-rules > div {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 11px;
-
-          padding: 10px 11px;
-
-          border: 1px solid rgba(38, 55, 80, 0.65);
-
-          border-radius: 10px;
-
-          background: rgba(14, 21, 34, 0.45);
-
-        }
-
-        .orbi-emergency-rules > div > span {
-
-          width: 28px;
-
-          height: 28px;
-
-          flex: 0 0 auto;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 8px;
-
-          color: #ffb4b4;
-
-          border: 1px solid rgba(239, 68, 68, 0.18);
-
-          background: rgba(239, 68, 68, 0.07);
-
-          font-size: 8px;
-
-          font-weight: 900;
-
-        }
-
-        .orbi-emergency-rules b,
-
-        .orbi-emergency-rules small {
-
-          display: block;
-
-        }
-
-        .orbi-emergency-rules b {
-
-          color: #eaf0f7;
-
-          font-size: 11px;
-
-        }
-
-        .orbi-emergency-rules small {
-
-          margin-top: 3px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          line-height: 1.4;
-
-        }
-
-        .orbi-emergency-submit {
-
-          width: 100%;
-
-          min-height: 50px;
-
-          margin-top: 16px;
-
-          display: inline-flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          gap: 8px;
-
-          border: 1px solid rgba(239, 68, 68, 0.35);
-
-          border-radius: 12px;
-
-          color: #fff;
-
-          background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(153, 27, 27, 0.95));
-
-          font-size: 13px;
-
-          font-weight: 900;
-
-          cursor: pointer;
-
-          box-shadow: 0 14px 32px rgba(127, 29, 29, 0.2);
-
-          transition: 180ms ease;
-
-        }
-
-        .orbi-emergency-submit:hover:not(:disabled) {
-
-          transform: translateY(-1px);
-
-          box-shadow: 0 17px 38px rgba(127, 29, 29, 0.28);
-
-        }
-
-        .orbi-emergency-submit:disabled {
-
-          opacity: 0.5;
-
-          cursor: not-allowed;
-
-          box-shadow: none;
-
-        }
-
-        .orbi-emergency-lifecycle {
-
-          gap: 8px;
-
-        }
-
-        .orbi-emergency-package-list {
-
-          display: grid;
-
-          gap: 9px;
-
-        }
-
-        .orbi-emergency-package {
-
-          display: grid;
-
-          grid-template-columns: 0.8fr 1fr 1fr 1.15fr 1.15fr auto;
-
-          align-items: center;
-
-          gap: 10px;
-
-          padding: 13px;
-
-          border: 1px solid rgba(38, 55, 80, 0.75);
-
-          border-radius: 12px;
-
-          background: rgba(6, 10, 17, 0.55);
-
-        }
-
-        .orbi-emergency-package.eligible {
-
-          border-color: rgba(239, 68, 68, 0.2);
-
-        }
-
-        .orbi-emergency-package > div > span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 7px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.11em;
-
-        }
-
-        .orbi-emergency-package b {
-
-          display: block;
-
-          margin-top: 4px;
-
-          font-size: 11px;
-
-        }
-
-        .orbi-emergency-package-badge {
-
-          justify-self: end;
-
-          padding: 5px 8px;
-
-          border-radius: 999px;
-
-          font-size: 7px !important;
-
-          font-weight: 900 !important;
-
-          letter-spacing: 0.1em !important;
-
-          white-space: nowrap;
-
-        }
-
-        .orbi-emergency-package-badge.eligible {
-
-          color: #fca5a5;
-
-          border: 1px solid rgba(239, 68, 68, 0.18);
-
-          background: rgba(239, 68, 68, 0.07);
-
-        }
-
-        .orbi-emergency-package-badge.locked {
-
-          color: #aebbd0;
-
-          border: 1px solid rgba(139, 155, 176, 0.13);
-
-          background: rgba(139, 155, 176, 0.06);
-
-        }
-
-        .orbi-emergency-confirm-box {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          gap: 10px;
-
-          margin-top: 18px;
-
-          padding: 13px;
-
-          border: 1px solid rgba(239, 68, 68, 0.24);
-
-          border-radius: 12px;
-
-          color: #fecaca;
-
-          background: rgba(239, 68, 68, 0.06);
-
-        }
-
-        .orbi-emergency-confirm-box strong,
-
-        .orbi-emergency-confirm-box p {
-
-          display: block;
-
-        }
-
-        .orbi-emergency-confirm-box strong {
-
-          font-size: 12px;
-
-        }
-
-        .orbi-emergency-confirm-box p {
-
-          margin: 4px 0 0;
-
-          color: #d7a4a4;
-
-          font-size: 10px;
-
-          line-height: 1.5;
-
-        }
-
-        .orbi-modal-secondary {
-
-          width: 100%;
-
-          min-height: 45px;
-
-          margin-top: 9px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 11px;
-
-          color: var(--od-muted);
-
-          background: rgba(255, 255, 255, 0.025);
-
-          font-size: 12px;
-
-          font-weight: 800;
-
-          cursor: pointer;
-
-        }
-
-        .orbi-modal-secondary:hover:not(:disabled) {
-
-          color: #fff;
-
-          border-color: var(--od-border-light);
-
-        }
-
-        .orbi-modal-secondary:disabled {
-
-          opacity: 0.45;
-
-          cursor: not-allowed;
-
-        }
-
-        .orbi-modal-backdrop {
-
-          position: fixed;
-
-          inset: 0;
-
-          z-index: 10000;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          padding: 24px;
-
-          overflow-y: auto;
-
-          background: rgba(0, 0, 0, 0.76);
-
-          backdrop-filter: blur(10px);
-
-          -webkit-backdrop-filter: blur(10px);
-
-        }
-
-        .orbi-modal {
-
-          position: relative;
-
-          z-index: 10001;
-
-          width: min(560px, calc(100vw - 32px));
-
-          max-height: calc(100vh - 48px);
-
-          overflow-y: auto;
-
-          margin: auto;
-
-          padding: 24px;
-
-          border: 1px solid var(--od-border-light);
-
-          border-radius: 20px;
-
-          background: linear-gradient(180deg, #0d1420 0%, #080d15 100%);
-
-          box-shadow: 0 30px 100px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(22, 140, 255, 0.06);
-
-        }
-
-        .orbi-modal-head {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          justify-content: space-between;
-
-          gap: 18px;
-
-        }
-
-        .orbi-modal-head h2 {
-
-          margin: 7px 0 7px;
-
-          font-size: 26px;
-
-          line-height: 1.1;
-
-        }
-
-        .orbi-modal-head p {
-
-          margin: 0;
-
-          color: var(--od-muted);
-
-          font-size: 13px;
-
-          line-height: 1.55;
-
-          max-width: 430px;
-
-        }
-
-        .orbi-modal-close {
-
-          width: 38px;
-
-          height: 38px;
-
-          flex: 0 0 auto;
-
-          display: grid;
-
-          place-items: center;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 10px;
-
-          color: var(--od-muted);
-
-          background: rgba(255,255,255,0.025);
-
-          cursor: pointer;
-
-        }
-
-        .orbi-modal-close:hover:not(:disabled) {
-
-          color: #fff;
-
-          border-color: var(--od-border-light);
-
-        }
-
-        .orbi-modal-close:disabled {
-
-          opacity: 0.4;
-
-          cursor: not-allowed;
-
-        }
-
-        .orbi-modal-balance {
-
-          display: grid;
-
-          grid-template-columns: 1fr 1fr;
-
-          gap: 10px;
-
-          margin-top: 22px;
-
-        }
-
-        .orbi-modal-balance > div {
-
-          padding: 14px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 13px;
-
-          background: rgba(255,255,255,0.02);
-
-        }
-
-        .orbi-modal-balance span,
-
-        .orbi-modal-field label,
-
-        .orbi-modal-label-row button {
-
-          color: var(--od-muted-2);
-
-          font-size: 10px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-modal-balance strong {
-
-          display: block;
-
-          margin-top: 6px;
-
-          color: #fff;
-
-          font-size: 18px;
-
-        }
-
-        .orbi-modal-field {
-
-          margin-top: 20px;
-
-        }
-
-        .orbi-modal-label-row {
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          margin-bottom: 8px;
-
-        }
-
-        .orbi-modal-label-row button {
-
-          padding: 0;
-
-          border: 0;
-
-          background: transparent;
-
-          color: #6eb8ff;
-
-          cursor: pointer;
-
-        }
-
-        .orbi-modal-label-row button:disabled {
-
-          opacity: 0.4;
-
-          cursor: not-allowed;
-
-        }
-
-        .orbi-amount-input-wrap {
-
-          display: flex;
-
-          align-items: center;
-
-          min-height: 60px;
-
-          padding: 0 16px;
-
-          gap: 10px;
-
-          border: 1px solid #29405e;
-
-          border-radius: 13px;
-
-          background: #070c14;
-
-          box-shadow: inset 0 0 0 1px rgba(22, 140, 255, 0.03);
-
-        }
-
-        .orbi-amount-input-wrap > span:first-child {
-
-          color: #8fa4bd;
-
-          font-size: 21px;
-
-          font-weight: 700;
-
-        }
-
-        .orbi-amount-input-wrap input {
-
-          width: 100%;
-
-          min-width: 0;
-
-          border: 0;
-
-          outline: 0;
-
-          color: #fff;
-
-          background: transparent;
-
-          font-size: 23px;
-
-          font-weight: 800;
-
-        }
-
-        .orbi-amount-input-wrap input::placeholder {
-
-          color: #41536a;
-
-        }
-
-        .orbi-amount-input-wrap > span:last-child {
-
-          flex: 0 0 auto;
-
-          color: #6f8198;
-
-          font-size: 10px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.08em;
-
-        }
-
-        .orbi-modal-field > small {
-
-          display: block;
-
-          margin-top: 8px;
-
-          color: var(--od-muted-2);
-
-          font-size: 11px;
-
-        }
-
-        .orbi-transaction-steps {
-
-          display: grid;
-
-          gap: 9px;
-
-          margin-top: 20px;
-
-        }
-
-        .orbi-transaction-steps > div {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 12px;
-
-          padding: 12px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 12px;
-
-          background: rgba(255,255,255,0.018);
-
-        }
-
-        .orbi-transaction-steps > div > span {
-
-          width: 30px;
-
-          height: 30px;
-
-          flex: 0 0 auto;
-
-          display: grid;
-
-          place-items: center;
-
-          border-radius: 50%;
-
-          color: #9fb1c5;
-
-          background: #101a28;
-
-          border: 1px solid #263a53;
-
-          font-size: 12px;
-
-          font-weight: 900;
-
-        }
-
-        .orbi-transaction-steps > div.current {
-
-          border-color: rgba(22, 140, 255, 0.45);
-
-          background: rgba(22, 140, 255, 0.055);
-
-        }
-
-        .orbi-transaction-steps > div.current > span {
-
-          color: #fff;
-
-          border-color: rgba(22, 140, 255, 0.6);
-
-          background: rgba(22, 140, 255, 0.2);
-
-        }
-
-        .orbi-transaction-steps > div.done > span {
-
-          color: #fff;
-
-          border-color: rgba(34, 197, 94, 0.45);
-
-          background: rgba(34, 197, 94, 0.14);
-
-        }
-
-        .orbi-transaction-steps strong {
-
-          display: block;
-
-          color: #eef4fb;
-
-          font-size: 13px;
-
-        }
-
-        .orbi-transaction-steps small {
-
-          display: block;
-
-          margin-top: 3px;
-
-          color: var(--od-muted-2);
-
-          font-size: 11px;
-
-          line-height: 1.4;
-
-        }
-
-        .orbi-modal-message {
-
-          display: flex;
-
-          align-items: flex-start;
-
-          gap: 8px;
-
-          margin-top: 14px;
-
-          padding: 11px 12px;
-
-          border: 1px solid rgba(239, 68, 68, 0.2);
-
-          border-radius: 10px;
-
-          color: #ffb4b4;
-
-          background: rgba(239, 68, 68, 0.06);
-
-          font-size: 12px;
-
-          line-height: 1.45;
-
-          word-break: break-word;
-
-        }
-
-        .orbi-modal-tx {
-
-          display: inline-flex;
-
-          align-items: center;
-
-          gap: 6px;
-
-          margin-top: 11px;
-
-          color: #72bcff;
-
-          font-size: 11px;
-
-          text-decoration: none;
-
-        }
-
-        .orbi-modal-submit {
-
-          width: 100%;
-
-          min-height: 52px;
-
-          margin-top: 18px;
-
-          border: 0;
-
-          border-radius: 12px;
-
-          color: #fff;
-
-          background: linear-gradient(135deg, #168cff, #7357ff);
-
-          font-size: 14px;
-
-          font-weight: 900;
-
-          cursor: pointer;
-
-          box-shadow: 0 14px 34px rgba(22, 140, 255, 0.2);
-
-        }
-
-        .orbi-modal-submit:disabled {
-
-          opacity: 0.5;
-
-          cursor: not-allowed;
-
-          box-shadow: none;
-
-        }
-
-        .orbi-modal-note {
-
-          margin: 12px 0 0;
-
-          color: var(--od-muted-2);
-
-          text-align: center;
-
-          font-size: 10px;
-
-          line-height: 1.5;
-
-        }
-
-        .orbi-settings-card {
-
-          min-height: 100%;
-
-        }
-
-        .orbi-settings-overview .orbi-stat {
-
-          min-height: 132px;
-
-        }
-
-        .orbi-settings-list {
-
-          display: flex;
-
-          flex-direction: column;
-
-          border-top: 1px solid rgba(38, 55, 80, 0.45);
-
-        }
-
-        .orbi-settings-row {
-
-          min-height: 72px;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: space-between;
-
-          gap: 18px;
-
-          padding: 13px 0;
-
-          border-bottom: 1px solid rgba(38, 55, 80, 0.42);
-
-        }
-
-        .orbi-settings-row:last-child {
-
-          border-bottom: 0;
-
-        }
-
-        .orbi-settings-row > div:first-child {
-
-          min-width: 0;
-
-        }
-
-        .orbi-settings-row span {
-
-          display: block;
-
-          color: var(--od-muted-2);
-
-          font-size: 8px;
-
-          font-weight: 800;
-
-          letter-spacing: 0.14em;
-
-        }
-
-        .orbi-settings-row strong {
-
-          display: block;
-
-          margin-top: 5px;
-
-          font-size: 13px;
-
-          font-weight: 750;
-
-          overflow-wrap: anywhere;
-
-        }
-
-        .orbi-settings-row small {
-
-          display: block;
-
-          margin-top: 4px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          overflow-wrap: anywhere;
-
-        }
-
-        .orbi-settings-value-right {
-
-          flex: 0 0 auto;
-
-          min-width: 125px;
-
-          text-align: right;
-
-        }
-
-        .orbi-settings-address-row {
-
-          align-items: center;
-
-        }
-
-        .orbi-settings-actions {
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 7px;
-
-          flex: 0 0 auto;
-
-        }
-
-        .orbi-settings-actions .orbi-copy-btn,
-
-        .orbi-settings-address-row > .orbi-copy-btn {
-
-          min-height: 34px;
-
-          padding: 0 10px;
-
-          font-size: 10px;
-
-        }
-
-        .orbi-settings-success {
-
-          color: #86efac !important;
-
-        }
-
-        .orbi-settings-danger {
-
-          color: #fca5a5 !important;
-
-        }
-
-        .orbi-settings-feature-grid {
-
-          display: grid;
-
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-
-          gap: 10px;
-
-        }
-
-        .orbi-settings-feature {
-
-          min-height: 72px;
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 10px;
-
-          padding: 13px;
-
-          border: 1px solid var(--od-border);
-
-          border-radius: 12px;
-
-          background: rgba(8, 13, 21, 0.55);
-
-        }
-
-        .orbi-settings-feature-dot {
-
-          width: 8px;
-
-          height: 8px;
-
-          flex: 0 0 8px;
-
-          border-radius: 50%;
-
-        }
-
-        .orbi-settings-feature-dot.enabled {
-
-          background: var(--od-success);
-
-          box-shadow: 0 0 11px rgba(34, 197, 94, 0.6);
-
-        }
-
-        .orbi-settings-feature-dot.disabled {
-
-          background: #64748b;
-
-        }
-
-        .orbi-settings-feature > div {
-
-          min-width: 0;
-
-          flex: 1;
-
-        }
-
-        .orbi-settings-feature strong {
-
-          display: block;
-
-          font-size: 12px;
-
-        }
-
-        .orbi-settings-feature small {
-
-          display: block;
-
-          margin-top: 3px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-        }
-
-        .orbi-settings-feature > b {
-
-          font-size: 9px;
-
-          letter-spacing: 0.12em;
-
-        }
-
-        .orbi-settings-feature > b.enabled {
-
-          color: #86efac;
-
-        }
-
-        .orbi-settings-feature > b.disabled {
-
-          color: var(--od-muted-2);
-
-        }
-
-        .orbi-settings-loading {
-
-          min-height: 76px;
-
-          display: flex;
-
-          align-items: center;
-
-          gap: 9px;
-
-          color: var(--od-muted);
-
-          font-size: 12px;
-
-        }
-
-        .orbi-settings-disconnect {
-
-          width: 100%;
-
-          min-height: 42px;
-
-          display: inline-flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          gap: 8px;
-
-          border: 1px solid rgba(239, 68, 68, 0.28);
-
-          border-radius: 11px;
-
-          background: rgba(239, 68, 68, 0.055);
-
-          color: #fca5a5;
-
-          font-weight: 750;
-
-          transition: 180ms ease;
-
-        }
-
-        .orbi-settings-disconnect:hover {
-
-          border-color: rgba(239, 68, 68, 0.45);
-
-          background: rgba(239, 68, 68, 0.09);
-
-          color: #fff;
-
-        }
-
-        .orbi-settings-session-note {
-
-          display: block;
-
-          margin-top: 9px;
-
-          color: var(--od-muted-2);
-
-          font-size: 9px;
-
-          line-height: 1.5;
-
-        }
-
-        .orbi-mobile-overlay {
-
-          display: none;
-
-        }
-
-        @media (max-width: 1024px) {
-
-          .orbi-main {
-
-            padding-left: 24px;
-
-            padding-right: 24px;
-
-          }
-
-          .orbi-stat-grid {
-
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-
-          }
-
-          .orbi-two-column {
-
-            grid-template-columns: 1fr;
-
-          }
-
-        }
-
-        @media (max-width: 850px) {
-
-          .orbi-mobile-overlay {
-
-            position: fixed;
-
-            inset: 0;
-
-            z-index: 45;
-
-            display: block;
-
-            border: 0;
-
-            padding: 0;
-
-            background: rgba(0, 0, 0, 0.58);
-
-            backdrop-filter: blur(2px);
-
-            -webkit-backdrop-filter: blur(2px);
-
-          }
-
-          .orbi-sidebar {
-
-            width: min(290px, 84vw);
-
-          }
-
-          .orbi-mobile-top {
-
-            margin-left: -16px;
-
-            margin-right: -16px;
-
-          }
-
-          .orbi-welcome h1 {
-
-            font-size: clamp(28px, 6vw, 38px);
-
-          }
-
-          .orbi-connect-panel {
-
-            min-height: 0;
-
-          }
-
-        }
-
-        @media (max-width: 640px) {
-
-          .orbi-package-overview-grid,
-
-          .orbi-package-grid-page,
-
-          .orbi-package-detail-row,
-
-          .orbi-package-meta-grid {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-stat-grid,
-
-          .orbi-package-grid,
-
-          .orbi-balance-grid,
-
-          .orbi-network-grid,
-
-          .orbi-activity-grid,
-
-          .orbi-achievement-row,
-
-          .orbi-achievement-wallets {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-connect-panel {
-
-            flex-direction: column;
-
-            align-items: flex-start;
-
-          }
-
-          .orbi-primary-btn {
-
-            width: 100%;
-
-          }
-
-          .orbi-package-actions {
-
-            width: 100%;
-
-            justify-content: stretch;
-
-          }
-
-          .orbi-package-actions > button {
-
-            flex: 1 1 100%;
-
-            width: 100%;
-
-          }
-
-          .orbi-modal-backdrop {
-
-            align-items: flex-end;
-
-            padding: 10px;
-
-          }
-
-          .orbi-modal {
-
-            width: 100%;
-
-            max-height: calc(100vh - 20px);
-
-            padding: 18px;
-
-            border-radius: 18px;
-
-          }
-
-          .orbi-modal-balance {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-wallet-bar,
-
-          .orbi-activity-foot {
-
-            align-items: flex-start;
-
-            flex-direction: column;
-
-            padding-top: 12px;
-
-            padding-bottom: 12px;
-
-          }
-
-          .orbi-package-stats {
-
-            grid-template-columns: 1fr 1fr;
-
-          }
-
-          .orbi-withdraw-preview,
-
-          .orbi-withdraw-rules {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-referral-row {
-
-            flex-direction: column;
-
-          }
-
-          .orbi-settings-feature-grid {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-settings-row {
-
-            align-items: flex-start;
-
-            flex-direction: column;
-
-          }
-
-          .orbi-settings-value-right {
-
-            min-width: 0;
-
-            text-align: left;
-
-          }
-
-          .orbi-settings-address-row {
-
-            flex-direction: column;
-
-          }
-
-          .orbi-settings-actions {
-
-            width: 100%;
-
-          }
-
-          .orbi-settings-actions .orbi-copy-btn,
-
-          .orbi-settings-address-row > .orbi-copy-btn {
-
-            flex: 1;
-
-            width: 100%;
-
-          }
-
-          .orbi-copy-btn {
-
-            width: 100%;
-
-          }
-
-          .orbi-card {
-
-            padding: 16px;
-
-          }
-
-          .orbi-main {
-
-            padding-left: 12px;
-
-            padding-right: 12px;
-
-            padding-bottom: 28px;
-
-          }
-
-          .orbi-welcome {
-
-            margin-bottom: 18px;
-
-            gap: 14px;
-
-          }
-
-          .orbi-welcome h1 {
-
-            font-size: clamp(25px, 8vw, 34px);
-
-            line-height: 1.08;
-
-          }
-
-          .orbi-welcome p {
-
-            font-size: 12px;
-
-          }
-
-          .orbi-refresh-btn {
-
-            width: 100%;
-
-          }
-
-          .orbi-wallet-bar {
-
-            padding: 12px 13px;
-
-          }
-
-          .orbi-wallet-left {
-
-            min-width: 0;
-
-          }
-
-          .orbi-wallet-left strong {
-
-            overflow: hidden;
-
-            text-overflow: ellipsis;
-
-            white-space: nowrap;
-
-            max-width: 190px;
-
-          }
-
-          .orbi-stat {
-
-            min-height: 125px;
-
-            padding: 15px;
-
-          }
-
-          .orbi-stat-icon {
-
-            margin-bottom: 13px;
-
-          }
-
-          .orbi-stat-value {
-
-            font-size: 22px;
-
-          }
-
-          .orbi-card {
-
-            padding: 15px;
-
-            border-radius: 14px;
-
-          }
-
-          .orbi-card-head {
-
-            margin-bottom: 14px;
-
-          }
-
-          .orbi-card h2 {
-
-            font-size: 17px;
-
-          }
-
-          .orbi-mobile-brand {
-
-            color: #fff;
-
-            text-shadow: 0 0 18px rgba(22,140,255,0.28);
-
-          }
-
-        }
-
-        @media (max-width: 420px) {
-
-          .orbi-stat-grid {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-package-stats {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-balance-grid {
-
-            grid-template-columns: 1fr;
-
-          }
-
-          .orbi-welcome h1 {
-
-            font-size: 27px;
-
-          }
-
-          .orbi-wallet-left strong {
-
-            max-width: 150px;
-
-          }
-
-        }
-
-      `}</style>
-
-      <aside className={`orbi-sidebar ${mobileOpen ? "open" : ""}`}>
-
-        <div className="orbi-brand">
-
-          <div className="orbi-brand-logo-wrap">
-
-            <img
-
-              src="/orbi-logo.png"
-
-              alt="ORBI WORLD"
-
-              className="orbi-brand-logo"
-
-            />
-
-          </div>
-
-        </div>
-
-        <nav className="orbi-nav">
-
-          {navItems.map((item) => (
-
-            <button
-
-              key={item.label}
-
-              className={`orbi-nav-button ${
-
-                activeNav === item.label ? "active" : ""
-
-              } ${item.danger ? "danger" : ""}`}
-
-              onClick={() => {
-
-                setActiveNav(item.label);
-
-                setMobileOpen(false);
-
-              }}
-
-            >
-
-              <Icon name={item.icon} size={18} />
-
-              <span>{item.label}</span>
-
-            </button>
-
-          ))}
-
-          <div className="orbi-nav-divider" />
-
-          {utilityItems.map((item) => (
-
-            <button
-
-              key={item.label}
-
-              className={`orbi-nav-button ${
-
-                activeNav === item.label ? "active" : ""
-
-              }`}
-
-              onClick={() => {
-
-                setActiveNav(item.label);
-
-                setMobileOpen(false);
-
-              }}
-
-            >
-
-              <Icon name={item.icon} size={18} />
-
-              <span>{item.label}</span>
-
-            </button>
-
-          ))}
-
-        </nav>
-
-        <div className="orbi-sidebar-bottom">
-
-          ORBI WORLD<br />
-
-          BNB SMART CHAIN TESTNET
-
-        </div>
-
-      </aside>
-
-      {mobileOpen && (
-
-        <button
-
-          type="button"
-
-          className="orbi-mobile-overlay"
-
-          onClick={() => setMobileOpen(false)}
-
-          aria-label="Close navigation"
-
-        />
-
-      )}
-
-      <section className="orbi-main">
-
-        <div className="orbi-mobile-top">
-
-          <span className="orbi-mobile-brand">ORBI WORLD</span>
-
-          <button
-
-            className="orbi-mobile-menu"
-
-            onClick={() => setMobileOpen((value) => !value)}
-
-            aria-label="Toggle navigation"
-
-          >
-
-            <Icon name={mobileOpen ? "close" : "menu"} size={20} />
-
-          </button>
-
-        </div>
-
-        <div className="orbi-main-inner">{renderMain()}</div>
-
-      </section>
-
-      {stakeModalOpen && (
-
-        <div
-
-          className="orbi-modal-backdrop"
-
-          role="presentation"
-
-          onMouseDown={(event) => {
-
-            if (event.target === event.currentTarget) closeStakeModal();
-
-          }}
-
-        >
-
-          <div
-
-            className="orbi-modal"
-
-            role="dialog"
-
-            aria-modal="true"
-
-            aria-labelledby="orbi-stake-modal-title"
-
-          >
-
-            <div className="orbi-modal-head">
-
-              <div>
-
-                <span className="orbi-section-kicker">ON-CHAIN STAKING</span>
-
-                <h2 id="orbi-stake-modal-title">
-
-                  {user.status === BigInt(USER_STATUS.ACTIVE)
-
-                    ? "Top Up Package"
-
-                    : "Account Activation"}
-
-                </h2>
-
-                <p>
-
-                  {user.status === BigInt(USER_STATUS.ACTIVE)
-
-                    ? "Add MOCUSDT to create another package on-chain."
-
-                    : "Activate your ORBI WORLD account with your first package."}
-
-                </p>
-
-              </div>
-
-              <button
-
-                className="orbi-modal-close"
-
-                onClick={closeStakeModal}
-
-                disabled={stakeBusy}
-
-                aria-label="Close staking modal"
-
-              >
-
-                <Icon name="close" size={20} />
-
-              </button>
-
-            </div>
-
-            <div className="orbi-modal-balance">
-
-              <div>
-
-                <span>MOCUSDT AVAILABLE</span>
-
-                <strong>${formatUsdt(usdtBalance)}</strong>
-
-              </div>
-
-              <div>
-
-                <span>MINIMUM</span>
-
-                <strong>${formatUsdt(minimumStake)}</strong>
-
-              </div>
-
-            </div>
-
-            <div className="orbi-modal-field">
-
-              <div className="orbi-modal-label-row">
-
-                <label htmlFor="orbi-stake-amount">AMOUNT</label>
-
-                <button
-
-                  type="button"
-
-                  onClick={() => setStakeAmount(ethers.formatUnits(usdtBalance, 18))}
-
-                  disabled={stakeBusy || usdtBalance <= 0n}
-
-                >
-
-                  MAX
-
-                </button>
-
-              </div>
-
-              <div className="orbi-amount-input-wrap">
-
-                <span>$</span>
-
-                <input
-
-                  id="orbi-stake-amount"
-
-                  type="text"
-
-                  inputMode="decimal"
-
-                  autoComplete="off"
-
-                  placeholder="0.00"
-
-                  value={stakeAmount}
-
-                  onChange={(event) => {
-
-                    const value = event.target.value;
-
-                    if (/^\d*(?:\.\d{0,18})?$/.test(value)) {
-
-                      setStakeAmount(value);
-
-                      setStakeMessage("");
-
-                    }
-
-                  }}
-
-                  disabled={stakeBusy}
-
-                />
-
-                <span>MOCUSDT</span>
-
-              </div>
-
-              <small>
-
-                Available: ${formatUsdt(usdtBalance)} · Minimum: ${formatUsdt(minimumStake)}
-
-              </small>
-
-            </div>
-
-            <div className="orbi-transaction-steps">
-
-              <div className={stakeStep === "approving" ? "current" : stakeStep === "staking" ? "done" : ""}>
-
-                <span>1</span>
-
-                <div>
-
-                  <strong>MOCUSDT Approval</strong>
-
-                  <small>Allow ORBI WORLD to use the selected amount.</small>
-
-                </div>
-
-              </div>
-
-              <div className={stakeStep === "staking" ? "current" : ""}>
-
-                <span>2</span>
-
-                <div>
-
-                  <strong>
-
-                    {user.status === BigInt(USER_STATUS.ACTIVE)
-
-                      ? "Create Top-Up Package"
-
-                      : "Activate Account"}
-
-                  </strong>
-
-                  <small>Confirm the ORBI WORLD transaction in your wallet.</small>
-
-                </div>
-
-              </div>
-
-            </div>
-
-            {stakeMessage && (
-
-              <div className="orbi-modal-message">
-
-                <Icon name="alert" size={16} />
-
-                <span>{stakeMessage}</span>
-
-              </div>
-
-            )}
-
-            {stakeTxHash && (
-
-              <a
-
-                className="orbi-modal-tx"
-
-                href={`${BLOCK_EXPLORER}/tx/${stakeTxHash}`}
-
-                target="_blank"
-
-                rel="noreferrer"
-
-              >
-
-                View transaction on BscScan <Icon name="external" size={13} />
-
-              </a>
-
-            )}
-
-            <button
-
-              className="orbi-modal-submit"
-
-              onClick={submitStake}
-
-              disabled={stakeBusy || !stakeAmount || usdtBalance <= 0n}
-
-            >
-
-              {stakeBusy
-
-                ? stakeStep === "approving"
-
-                  ? "Waiting for Approval..."
-
-                  : "Waiting for Confirmation..."
-
-                : user.status === BigInt(USER_STATUS.ACTIVE)
-
-                  ? "Approve & Top Up"
-
-                  : "Approve & Stake"}
-
-            </button>
-
-            <p className="orbi-modal-note">
-
-              You will be asked to confirm each blockchain transaction in your connected wallet.
-
-            </p>
-
-          </div>
-
-        </div>
-
-      )}
-
-      {emergencyConfirmOpen && (
-
-        <div
-
-          className="orbi-modal-backdrop"
-
-          role="presentation"
-
-          onMouseDown={(event) => {
-
-            if (event.target === event.currentTarget && !emergencyBusy) {
-
-              setEmergencyConfirmOpen(false);
-
-            }
-
-          }}
-
-        >
-
-          <div
-
-            className="orbi-modal orbi-emergency-modal"
-
-            role="dialog"
-
-            aria-modal="true"
-
-            aria-labelledby="orbi-emergency-modal-title"
-
-          >
-
-            <div className="orbi-modal-head">
-
-              <div>
-
-                <span className="orbi-section-kicker orbi-emergency-eyebrow-text">
-
-                  PERMANENT ACTION
-
-                </span>
-
-                <h2 id="orbi-emergency-modal-title">Confirm Emergency Exit</h2>
-
-                <p>
-
-                  You are about to permanently close all active packages. The
-
-                  smart contract will transfer the eligible emergency amount
-
-                  to your wallet.
-
-                </p>
-
-              </div>
-
-              <button
-
-                className="orbi-modal-close"
-
-                onClick={() => setEmergencyConfirmOpen(false)}
-
-                disabled={emergencyBusy}
-
-                aria-label="Close Emergency Exit confirmation"
-
-              >
-
-                <Icon name="close" size={20} />
-
-              </button>
-
-            </div>
-
-            <div className="orbi-modal-balance">
-
-              <div>
-
-                <span>ELIGIBLE PACKAGES</span>
-
-                <strong>{emergencyEligiblePackages.length}</strong>
-
-              </div>
-
-              <div>
-
-                <span>ESTIMATED RETURN</span>
-
-                <strong>${formatUsdt(emergencyReturn)}</strong>
-
-              </div>
-
-            </div>
-
-            <div className="orbi-emergency-confirm-box">
-
-              <Icon name="alert" size={20} />
-
-              <div>
-
-                <strong>Important</strong>
-
-                <p>
-
-                  This action is irreversible. All active packages are closed,
-
-                  your account enters EMERGENCY EXIT status, and the contract
-
-                  determines the final return amount.
-
-                </p>
-
-              </div>
-
-            </div>
-
-            {emergencyMessage && (
-
-              <div className="orbi-modal-message">
-
-                <Icon name="alert" size={16} />
-
-                <span>{emergencyMessage}</span>
-
-              </div>
-
-            )}
-
-            {emergencyTxHash && (
-
-              <a
-
-                className="orbi-modal-tx"
-
-                href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
-
-                target="_blank"
-
-                rel="noreferrer"
-
-              >
-
-                View transaction on BscScan
-
-                <Icon name="external" size={13} />
-
-              </a>
-
-            )}
-
-            <button
-
-              className="orbi-emergency-submit orbi-emergency-confirm-submit"
-
-              onClick={emergencyCapitalWithdraw}
-
-              disabled={emergencyBusy}
-
-            >
-
-              <Icon name="alert" size={17} />
-
-              {emergencyBusy
-
-                ? "Waiting for Confirmation..."
-
-                : "Confirm & Execute Emergency Exit"}
-
-            </button>
-
-            <button
-
-              className="orbi-modal-secondary"
-
-              onClick={() => setEmergencyConfirmOpen(false)}
-
-              disabled={emergencyBusy}
-
-            >
-
-              Cancel
-
-            </button>
-
-            <p className="orbi-modal-note">
-
-              Your wallet will ask you to approve the on-chain Emergency Capital
-
-              Withdrawal transaction.
-
-            </p>
-
-          </div>
-
-        </div>
-
-      )}
-
-    </main>
-
-  );
-
+  const [wallet, setWallet] = useState("");
+  const [provider, setProvider] = useState<WalletProvider | null>(null);
+  const [dashboard, setDashboard] =
+    useState<DashboardState>(EMPTY_DASHBOARD);
+  const [packages, setPackages] = useState<PackageData[]>([]);
+  const [usdtBalance, setUsdtBalance] = useState<bigint>(0n);
+  const [nativeBalance, setNativeBalance] = useState<bigint>(0n);
+  const [activeNav, setActiveNav] = useState("Dashboard");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [networkError, setNetworkError] = useState("");
+  const [error, setError] = useState("");
+
+  // Stake / top-up modal state. The same modal handles first activation
+  // and subsequent top-ups using the current on-chain account status.
+  const [stakeModalOpen, setStakeModalOpen] = useState(false);
+  const [stakeAmount, setStakeAmount] = useState("");
+  const [minimumStake, setMinimumStake] = useState(0n);
+  const [stakeBusy, setStakeBusy] = useState(false);
+  const [stakeStep, setStakeStep] = useState<"idle" | "approving" | "staking">("idle");
+  const [stakeMessage, setStakeMessage] = useState("");
+  const [stakeTxHash, setStakeTxHash] = useState("");
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState("");
+  const [teamLoadedFor, setTeamLoadedFor] = useState("");
+  const [teamIndirectCount, setTeamIndirectCount] = useState<bigint>(0n);
+  const [referralLegBusiness, setReferralLegBusiness] = useState<Record<string, bigint>>({});
+  const [referralBusinessLoading, setReferralBusinessLoading] = useState(false);
+  const [referralBusinessError, setReferralBusinessError] = useState("");
+  const [levelIncomeBps, setLevelIncomeBps] = useState<bigint[]>(Array(10).fill(0n));
+  const [levelIncomeEnabled, setLevelIncomeEnabled] = useState(false);
+  const [levelIncomeHistory, setLevelIncomeHistory] = useState<LevelIncomeEntry[]>([]);
+  const [levelIncomeLoading, setLevelIncomeLoading] = useState(false);
+  const [levelIncomeError, setLevelIncomeError] = useState("");
+  const [rankRequirements, setRankRequirements] = useState<RankRequirementData[]>([]);
+  const [rankRewardEnabled, setRankRewardEnabled] = useState(false);
+  const [rankLoading, setRankLoading] = useState(false);
+  const [rankError, setRankError] = useState("");
+  const [royaltyRequirements, setRoyaltyRequirements] = useState<RoyaltyRequirementData[]>([]);
+  const [royaltyEnabled, setRoyaltyEnabled] = useState(false);
+  const [royaltyLoading, setRoyaltyLoading] = useState(false);
+  const [royaltyError, setRoyaltyError] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawWallet, setWithdrawWallet] = useState(0);
+  const [withdrawalMinimum, setWithdrawalMinimum] = useState(20n * 10n ** 18n);
+  const [withdrawalFeeBps, setWithdrawalFeeBps] = useState(1000n);
+  const [withdrawalEnabled, setWithdrawalEnabled] = useState(false);
+  const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalHistoryRow[]>([]);
+  const [withdrawalLoading, setWithdrawalLoading] = useState(false);
+  const [withdrawalError, setWithdrawalError] = useState("");
+  const [withdrawalBusy, setWithdrawalBusy] = useState(false);
+  const [withdrawalMessage, setWithdrawalMessage] = useState("");
+  const [withdrawalTxHash, setWithdrawalTxHash] = useState("");
+
+  // Emergency Exit state — isolated from all existing dashboard modules.
+  const [emergencyEnabled, setEmergencyEnabled] = useState(false);
+  const [emergencyLoading, setEmergencyLoading] = useState(false);
+  const [emergencyBusy, setEmergencyBusy] = useState(false);
+  const [emergencyMessage, setEmergencyMessage] = useState("");
+  const [emergencyTxHash, setEmergencyTxHash] = useState("");
+  const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
+
+  // Settings state — isolated from all existing dashboard modules.
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsCopied, setSettingsCopied] = useState(false);
+  const [contractPaused, setContractPaused] = useState(false);
+  const [settingsFeatures, setSettingsFeatures] = useState({
+    registrationEnabled: false,
+    stakingEnabled: false,
+    withdrawalEnabled: false,
+    capitalWithdrawalEnabled: false,
+  });
+
+  const loadDashboard = useCallback(async (walletAddress: string) => {
+    if (!walletAddress) return;
+
+    setLoading(true);
+    setError("");
+    setNetworkError("");
+
+    try {
+      const readContract = getOrbiWorldReadContract();
+      const usdtContract = getMocusdtReadContract();
+
+      const registered = await readContract.isRegistered(walletAddress);
+
+      const [native, usdt] = await Promise.all([
+        getReadBalance(walletAddress),
+        usdtContract.balanceOf(walletAddress),
+      ]);
+
+      setNativeBalance(native);
+      setUsdtBalance(usdt);
+
+      if (!registered) {
+        setDashboard(EMPTY_DASHBOARD);
+        setPackages([]);
+        setError(
+          "This wallet is not registered in ORBI WORLD yet. Dashboard data will appear after on-chain registration."
+        );
+        return;
+      }
+
+      const data = await readContract.getDashboardData(
+        await readContract.getUserId(walletAddress)
+      );
+
+      const normalized: DashboardState = {
+        user: normalizeUser(data?.user ?? data?.[0]),
+        packageIds: Array.from(data?.packageIds ?? data?.[1] ?? []).map(
+          toBigInt
+        ),
+        activePackageIds: Array.from(
+          data?.activePackageIds ?? data?.[2] ?? []
+        ).map(toBigInt),
+        directReferralIds: Array.from(
+          data?.directReferralIds ?? data?.[3] ?? []
+        ).map(toBigInt),
+      };
+
+      setDashboard(normalized);
+
+      const packageResults = await Promise.all(
+        normalized.packageIds.map(async (id) => {
+          const result = await readContract.getPackage(id);
+          return normalizePackage(result);
+        })
+      );
+
+      setPackages(packageResults);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load dashboard data from the blockchain."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  async function getReadBalance(address: string): Promise<bigint> {
+    try {
+      const readProvider = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+      return await readProvider.getBalance(address);
+    } catch {
+      return 0n;
+    }
+  }
+
+  const connectWallet = useCallback(async () => {
+    if (typeof window === "undefined") return;
+
+    const ethereum = (window as Window & {
+      ethereum?: WalletProvider;
+    }).ethereum;
+
+    if (!ethereum) {
+      setError(
+        "No compatible wallet detected. Install MetaMask or another EVM wallet."
+      );
+      return;
+    }
+
+    try {
+      setError("");
+      const browserProvider = new ethers.BrowserProvider(ethereum);
+      const accounts = await browserProvider.send("eth_requestAccounts", []);
+
+      if (!accounts?.[0]) return;
+
+      const networkOk = await isCorrectNetwork(browserProvider);
+
+      if (!networkOk) {
+        setNetworkError(
+          `Wrong network. Please switch your wallet to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
+        );
+      }
+
+      setProvider(ethereum);
+      setWallet(accounts[0]);
+
+      await loadDashboard(accounts[0]);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error ? err.message : "Wallet connection failed."
+      );
+    }
+  }, [loadDashboard]);
+
+  const openStakeModal = useCallback(async () => {
+    if (!wallet) {
+      setError("Connect your wallet before staking a package.");
+      return;
+    }
+
+    try {
+      setError("");
+      setStakeMessage("");
+      setStakeTxHash("");
+      setStakeStep("idle");
+
+      const readContract = getOrbiWorldReadContract();
+      const config = await readContract.s_stakingConfig();
+      const minimumStakeAmount = toBigInt(
+        config?.minimumStake ?? config?.[0]
+      );
+      const minimumTopupAmount = toBigInt(
+        config?.minimumTopup ?? config?.[1]
+      );
+      const minimum =
+        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
+          ? minimumTopupAmount
+          : minimumStakeAmount;
+
+      setMinimumStake(minimum);
+      setStakeAmount(
+        minimum > 0n ? ethers.formatUnits(minimum, 18) : ""
+      );
+      setStakeModalOpen(true);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load staking configuration."
+      );
+    }
+  }, [wallet, dashboard.user.status]);
+
+  const closeStakeModal = useCallback(() => {
+    if (stakeBusy) return;
+    setStakeModalOpen(false);
+    setStakeMessage("");
+    setStakeTxHash("");
+    setStakeStep("idle");
+  }, [stakeBusy]);
+
+  const submitStake = useCallback(async () => {
+    if (!wallet || !stakeAmount.trim()) {
+      setStakeMessage("Enter a valid amount.");
+      return;
+    }
+
+    if (!ethers.isAddress(wallet)) {
+      setStakeMessage("Connected wallet address is invalid.");
+      return;
+    }
+
+    let amount: bigint;
+    try {
+      amount = parseUSDT(stakeAmount.trim());
+    } catch {
+      setStakeMessage("Enter a valid MOCUSDT amount.");
+      return;
+    }
+
+    if (amount <= 0n) {
+      setStakeMessage("Amount must be greater than zero.");
+      return;
+    }
+
+    if (minimumStake > 0n && amount < minimumStake) {
+      setStakeMessage(
+        `Minimum stake is $${formatUsdt(minimumStake)} MOCUSDT.`
+      );
+      return;
+    }
+
+    try {
+      setStakeBusy(true);
+      setStakeMessage("");
+      setStakeTxHash("");
+
+      const ethereum = (window as Window & {
+        ethereum?: WalletProvider;
+      }).ethereum;
+
+      if (!ethereum) {
+        throw new Error("No compatible wallet detected.");
+      }
+
+      const browserProvider = new ethers.BrowserProvider(ethereum);
+      const networkOk = await isCorrectNetwork(browserProvider);
+
+      if (!networkOk) {
+        throw new Error(
+          `Wrong network. Please switch to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
+        );
+      }
+
+      const signer = await browserProvider.getSigner();
+      const signerAddress = await signer.getAddress();
+
+      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
+        throw new Error(
+          "Connected wallet changed. Please reconnect the correct wallet and try again."
+        );
+      }
+
+      const usdt = getMocusdtWriteContract(signer);
+      const orbi = getOrbiWorldWriteContract(signer);
+
+      const allowance = toBigInt(
+        await usdt.allowance(signerAddress, ORBI_WORLD_SPENDER_ADDRESS)
+      );
+
+      if (allowance < amount) {
+        setStakeStep("approving");
+        setStakeMessage("Approve MOCUSDT spending in your wallet...");
+
+        const approvalTx = await usdt.approve(
+          ORBI_WORLD_SPENDER_ADDRESS,
+          amount
+        );
+        setStakeTxHash(approvalTx.hash);
+        await approvalTx.wait();
+      }
+
+      setStakeStep("staking");
+      setStakeMessage(
+        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
+          ? "Submitting top-up transaction..."
+          : "Submitting activation transaction..."
+      );
+
+      const tx =
+        dashboard.user.status === BigInt(USER_STATUS.ACTIVE)
+          ? await orbi.topUp(amount)
+          : await orbi.activateAccount(amount);
+
+      setStakeTxHash(tx.hash);
+      await tx.wait();
+
+      setStakeMessage("Transaction confirmed. Refreshing on-chain data...");
+      await loadDashboard(wallet);
+
+      setStakeBusy(false);
+      setStakeStep("idle");
+      setStakeModalOpen(false);
+      setStakeMessage("");
+      setStakeTxHash("");
+    } catch (err) {
+      console.error(err);
+      setStakeBusy(false);
+      setStakeStep("idle");
+      setStakeMessage(
+        err instanceof Error
+          ? err.message
+          : "Stake transaction failed. Please try again."
+      );
+    }
+  }, [loadDashboard, minimumStake, stakeAmount, dashboard.user.status, wallet]);
+
+  const refresh = useCallback(async () => {
+    if (!wallet) return;
+    await loadDashboard(wallet);
+  }, [loadDashboard, wallet]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("orbi.dashboard.wallet");
+    if (saved && ethers.isAddress(saved)) {
+      setWallet(saved);
+      loadDashboard(saved);
+    }
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    if (wallet) {
+      window.localStorage.setItem("orbi.dashboard.wallet", wallet);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (!provider?.on) return;
+
+    const handleAccounts = (accounts: unknown) => {
+      const next = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
+
+      if (!next) {
+        setWallet("");
+        setDashboard(EMPTY_DASHBOARD);
+        setPackages([]);
+        return;
+      }
+
+      setWallet(next);
+      loadDashboard(next);
+    };
+
+    const handleChain = () => {
+      if (wallet) loadDashboard(wallet);
+    };
+
+    provider.on("accountsChanged", handleAccounts);
+    provider.on("chainChanged", handleChain);
+
+    return () => {
+      provider.removeListener?.("accountsChanged", handleAccounts);
+      provider.removeListener?.("chainChanged", handleChain);
+    };
+  }, [provider, wallet, loadDashboard]);
+
+  const loadMyTeam = useCallback(async (userId: bigint, currentWallet: string) => {
+    if (!currentWallet || userId === 0n) {
+      setTeamMembers([]);
+      setTeamIndirectCount(0n);
+      setTeamLoadedFor("");
+      return;
+    }
+
+    try {
+      setTeamLoading(true);
+      setTeamError("");
+
+      const contract = getOrbiWorldReadContract();
+      const directUsersRaw = await contract.getDirectUsers(userId);
+      const directUsers = Array.isArray(directUsersRaw)
+        ? directUsersRaw.map(normalizeUser)
+        : [];
+
+      const members: TeamMember[] = directUsers.map((member) => ({
+        ...member,
+        teamDepth: 1,
+        activityLabel:
+          member.status === BigInt(USER_STATUS.ACTIVE)
+            ? "Active"
+            : member.status === BigInt(USER_STATUS.BLACKLISTED)
+              ? "Blacklisted"
+              : member.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+                ? "Emergency Exit"
+                : "Inactive",
+      }));
+
+      // Count every descendant below the direct level. IDs are read from the
+      // contract and deduplicated so a member is counted only once.
+      const visited = new Set<string>([userId.toString()]);
+      const directIds = members.map((member) => member.id);
+      directIds.forEach((id) => visited.add(id.toString()));
+
+      let frontier = directIds;
+      let indirectCount = 0n;
+      let safetyRounds = 0;
+
+      while (frontier.length > 0 && safetyRounds < 100) {
+        safetyRounds += 1;
+        const nextIds: bigint[] = [];
+
+        for (let start = 0; start < frontier.length; start += 10) {
+          const batch = frontier.slice(start, start + 10);
+          const children = await Promise.all(
+            batch.map(async (parentId) => {
+              try {
+                const ids = await contract.getDirectReferrals(parentId);
+                return Array.isArray(ids) ? ids.map(toBigInt) : [];
+              } catch {
+                return [];
+              }
+            })
+          );
+
+          for (const ids of children) {
+            for (const childId of ids) {
+              const key = childId.toString();
+              if (childId === 0n || visited.has(key)) continue;
+              visited.add(key);
+              indirectCount += 1n;
+              nextIds.push(childId);
+            }
+          }
+        }
+
+        frontier = nextIds;
+      }
+
+      setTeamIndirectCount(indirectCount);
+      setTeamMembers(members);
+      setTeamLoadedFor(currentWallet.toLowerCase());
+    } catch (err) {
+      console.error("My Team load failed:", err);
+      setTeamMembers([]);
+      setTeamIndirectCount(0n);
+      setTeamError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load your direct team members."
+      );
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "My Team" && wallet && dashboard.user.id > 0n) {
+      const normalizedWallet = wallet.toLowerCase();
+      if (teamLoadedFor !== normalizedWallet) {
+        loadMyTeam(dashboard.user.id, wallet);
+      }
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
+  // Referral Center reuses the existing direct-team loader, then reads the
+  // contract's exact direct-leg business values without changing My Team.
+  useEffect(() => {
+    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n) {
+      const normalizedWallet = wallet.toLowerCase();
+      if (teamLoadedFor !== normalizedWallet) {
+        loadMyTeam(dashboard.user.id, wallet);
+      }
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamLoadedFor, loadMyTeam]);
+
+  const loadReferralBusiness = useCallback(async (userId: bigint, members: TeamMember[]) => {
+    if (userId === 0n || members.length === 0) {
+      setReferralLegBusiness({});
+      setReferralBusinessError("");
+      return;
+    }
+
+    try {
+      setReferralBusinessLoading(true);
+      setReferralBusinessError("");
+      const contract = getOrbiWorldReadContract();
+      const entries = await Promise.all(
+        members.map(async (member) => {
+          try {
+            const value = await contract.getDirectLegBusiness(userId, member.id);
+            return [member.id.toString(), toBigInt(value)] as const;
+          } catch {
+            return [member.id.toString(), 0n] as const;
+          }
+        })
+      );
+      setReferralLegBusiness(Object.fromEntries(entries));
+    } catch (err) {
+      console.error("Referral business load failed:", err);
+      setReferralLegBusiness({});
+      setReferralBusinessError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load direct referral business from the blockchain."
+      );
+    } finally {
+      setReferralBusinessLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "Referral" && wallet && dashboard.user.id > 0n && !teamLoading) {
+      loadReferralBusiness(dashboard.user.id, teamMembers);
+    }
+  }, [activeNav, wallet, dashboard.user.id, teamMembers, teamLoading, loadReferralBusiness]);
+
+  const loadLevelIncome = useCallback(async (userId: bigint) => {
+    if (userId === 0n) {
+      setLevelIncomeBps(Array(10).fill(0n));
+      setLevelIncomeEnabled(false);
+      setLevelIncomeHistory([]);
+      setLevelIncomeError("");
+      return;
+    }
+
+    try {
+      setLevelIncomeLoading(true);
+      setLevelIncomeError("");
+
+      const rpc = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+      const levelContract = new ethers.Contract(
+        ORBI_WORLD_SPENDER_ADDRESS,
+        LEVEL_INCOME_READ_ABI,
+        rpc
+      );
+
+      const config = await levelContract.getLevelIncomeConfig();
+
+      const rawBps = Array.from(
+        config?.incomeBps ?? config?.[0] ?? []
+      ).map(toBigInt);
+
+      setLevelIncomeBps(
+        rawBps.length === 10 ? rawBps : Array(10).fill(0n)
+      );
+      setLevelIncomeEnabled(
+        Boolean(config?.enabled ?? config?.[1])
+      );
+
+      // Public BSC RPC endpoints can reject large eth_getLogs ranges.
+      // Query from newest to oldest in 10,000-block chunks, stop once we have
+      // the latest 50 payouts, and keep a failed chunk from breaking config.
+      const filter = levelContract.filters.LevelIncomePaid(null, userId, null);
+      const latestBlock = await rpc.getBlockNumber();
+      const earliestBlock = Math.max(0, latestBlock - 500_000);
+      const chunkSize = 10_000;
+      const logs: any[] = [];
+
+      for (let end = latestBlock; end >= earliestBlock; end -= chunkSize) {
+        const start = Math.max(earliestBlock, end - chunkSize + 1);
+        try {
+          const chunk = await levelContract.queryFilter(filter, start, end);
+          logs.push(...chunk);
+          if (logs.length >= 50) break;
+        } catch (chunkError) {
+          console.warn(`Level Income query failed for ${start}-${end}:`, chunkError);
+        }
+      }
+
+      const recentLogs = logs
+        .sort((a: any, b: any) => {
+          const blockDiff = Number(b.blockNumber ?? 0) - Number(a.blockNumber ?? 0);
+          if (blockDiff !== 0) return blockDiff;
+          return Number(b.index ?? 0) - Number(a.index ?? 0);
+        })
+        .slice(0, 50);
+      const entries: LevelIncomeEntry[] = await Promise.all(
+        recentLogs.map(async (log: any) => {
+          const args = log.args;
+          let timestamp = 0;
+          try {
+            const block = await rpc.getBlock(log.blockNumber);
+            timestamp = block?.timestamp ?? 0;
+          } catch {
+            timestamp = 0;
+          }
+
+          return {
+            fromUserId: toBigInt(args?.fromUserId ?? args?.[0]),
+            toUserId: toBigInt(args?.toUserId ?? args?.[1]),
+            level: toBigInt(args?.level ?? args?.[2]),
+            amount: toBigInt(args?.amount ?? args?.[3]),
+            blockNumber: Number(log.blockNumber ?? 0),
+            timestamp,
+          };
+        })
+      );
+
+      setLevelIncomeHistory(entries);
+    } catch (err) {
+      console.error("Level Income load failed:", err);
+      setLevelIncomeHistory([]);
+      setLevelIncomeError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load Level Income configuration/history from the blockchain."
+      );
+    } finally {
+      setLevelIncomeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "Level Income" && wallet && dashboard.user.id > 0n) {
+      loadLevelIncome(dashboard.user.id);
+    }
+  }, [activeNav, wallet, dashboard.user.id, loadLevelIncome]);
+
+  const loadRankRewards = useCallback(async () => {
+    if (!wallet || dashboard.user.id === 0n) {
+      setRankRequirements([]);
+      setRankRewardEnabled(false);
+      setRankError("");
+      return;
+    }
+
+    try {
+      setRankLoading(true);
+      setRankError("");
+
+      const rpc = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+      const rankContract = new ethers.Contract(
+        ORBI_WORLD_SPENDER_ADDRESS,
+        [
+          "function s_rankConfig() view returns (bool rankRewardEnabled)",
+          "function MAX_RANK_LEVEL() view returns (uint8)",
+        ],
+        rpc
+      );
+
+      const [config, maxRankRaw] = await Promise.all([
+        rankContract.s_rankConfig(),
+        rankContract.MAX_RANK_LEVEL(),
+      ]);
+
+      setRankRewardEnabled(Boolean(config?.rankRewardEnabled ?? config?.[0]));
+
+      const maxRank = Math.min(20, Math.max(0, Number(toBigInt(maxRankRaw))));
+      const requirements: RankRequirementData[] = [];
+
+      // s_rankConfig is a public struct getter, but Solidity does not expose
+      // the nested fixed array through that getter. Read the three uint256
+      // storage slots for each RankRequirement directly from the deployed
+      // contract. This keeps the UI sourced from the actual on-chain values
+      // instead of duplicating rank requirements in frontend code.
+      for (let index = 0; index < maxRank; index += 1) {
+        const baseSlot =
+          RANK_CONFIG_BASE_SLOT +
+          BigInt(index) *
+            RANK_REQUIREMENT_SLOT_WIDTH;
+
+        const [powerRaw, otherRaw, rewardRaw] = await Promise.all([
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot),
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 1n),
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 2n),
+        ]);
+
+        requirements.push({
+          requiredPowerLeg: BigInt(powerRaw),
+          requiredOtherLeg: BigInt(otherRaw),
+          reward: BigInt(rewardRaw),
+        });
+      }
+
+      setRankRequirements(requirements);
+    } catch (err) {
+      console.error("Rank & Rewards load failed:", err);
+      setRankRequirements([]);
+      setRankRewardEnabled(false);
+      setRankError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load Rank & Rewards configuration from the blockchain."
+      );
+    } finally {
+      setRankLoading(false);
+    }
+  }, [wallet, dashboard.user.id]);
+
+  useEffect(() => {
+    if (activeNav === "Rank & Rewards" && wallet && dashboard.user.id > 0n) {
+      loadRankRewards();
+    }
+  }, [activeNav, wallet, dashboard.user.id, loadRankRewards]);
+
+  const loadRoyalty = useCallback(async () => {
+    if (!wallet || dashboard.user.id === 0n) {
+      setRoyaltyRequirements([]);
+      setRoyaltyEnabled(false);
+      setRoyaltyError("");
+      return;
+    }
+
+    try {
+      setRoyaltyLoading(true);
+      setRoyaltyError("");
+
+      const rpc = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+
+      // Read the deployed royalty configuration directly from storage.
+      // This is intentional: Solidity's autogenerated getter for
+      // s_royaltyConfig() only exposes royaltyEnabled and does not expose
+      // the nested fixed-size royalty array.
+      const enabledRaw = await rpc.getStorage(
+        ORBI_WORLD_SPENDER_ADDRESS,
+        ROYALTY_ENABLED_SLOT
+      );
+      setRoyaltyEnabled(BigInt(enabledRaw) !== 0n);
+
+      const requirements: RoyaltyRequirementData[] = [];
+
+      for (let index = 0; index < 2; index += 1) {
+        const baseSlot =
+          ROYALTY_CONFIG_BASE_SLOT +
+          BigInt(index) * ROYALTY_REQUIREMENT_SLOT_WIDTH;
+
+        const [lifetimeRaw, monthlyRaw, packedRaw] = await Promise.all([
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot),
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 1n),
+          rpc.getStorage(ORBI_WORLD_SPENDER_ADDRESS, baseSlot + 2n),
+        ]);
+
+        const packed = BigInt(packedRaw);
+
+        requirements.push({
+          requiredLifetimeBusiness: BigInt(lifetimeRaw),
+          requiredMonthlyBusiness: BigInt(monthlyRaw),
+          minimumActiveDirects: packed & 0xffn,
+          royaltyBps: (packed >> 8n) & 0xffffn,
+        });
+      }
+
+      setRoyaltyRequirements(requirements);
+    } catch (err) {
+      console.error("Royalty load failed:", err);
+      setRoyaltyRequirements([]);
+      setRoyaltyEnabled(false);
+      setRoyaltyError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load Royalty configuration from the blockchain."
+      );
+    } finally {
+      setRoyaltyLoading(false);
+    }
+  }, [wallet, dashboard.user.id]);
+
+  useEffect(() => {
+    if (activeNav === "Royalty" && wallet && dashboard.user.id > 0n) {
+      loadRoyalty();
+    }
+  }, [activeNav, wallet, dashboard.user.id, loadRoyalty]);
+
+  const loadWithdrawals = useCallback(async (userId: bigint) => {
+    if (!wallet || userId === 0n) {
+      setWithdrawalHistory([]);
+      setWithdrawalError("");
+      return;
+    }
+
+    try {
+      setWithdrawalLoading(true);
+      setWithdrawalError("");
+
+      const rpc = new ethers.JsonRpcProvider(
+        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+      );
+      const contractAddress = ORBI_WORLD_SPENDER_ADDRESS;
+      const readContract = new ethers.Contract(
+        contractAddress,
+        [
+          "function s_withdrawalConfig() view returns (uint256 minimumWithdrawal,uint16 withdrawalFeeBps)",
+          "function s_featureConfig() view returns (bool registrationEnabled,bool stakingEnabled,bool withdrawalEnabled,bool capitalWithdrawalEnabled)",
+        ],
+        rpc
+      );
+
+      const [withdrawConfig, featureConfig] = await Promise.all([
+        readContract.s_withdrawalConfig(),
+        readContract.s_featureConfig(),
+      ]);
+
+      const minimum = toBigInt(
+        withdrawConfig?.minimumWithdrawal ?? withdrawConfig?.[0]
+      );
+      const feeBps = toBigInt(
+        withdrawConfig?.withdrawalFeeBps ?? withdrawConfig?.[1]
+      );
+      const enabled = Boolean(
+        featureConfig?.withdrawalEnabled ?? featureConfig?.[2]
+      );
+
+      setWithdrawalMinimum(minimum);
+      setWithdrawalFeeBps(feeBps);
+      setWithdrawalEnabled(enabled);
+
+      // One bounded log stream is used for all three withdrawal events.
+      // We filter by the current user after decoding, which avoids firing
+      // three separate eth_getLogs queries for the same block range.
+      const requestedTopic = ethers.id(
+        "WithdrawalRequested(uint256,uint256,uint8,uint256,uint256,uint256)"
+      );
+      const approvedTopic = ethers.id(
+        "WithdrawalApproved(uint256,uint256,uint256)"
+      );
+      const rejectedTopic = ethers.id(
+        "WithdrawRejected(uint256,uint256)"
+      );
+      const withdrawalInterface = new ethers.Interface([
+        "event WithdrawalRequested(uint256 indexed requestId,uint256 indexed userId,uint8 walletType,uint256 amount,uint256 fee,uint256 netAmount)",
+        "event WithdrawalApproved(uint256 indexed requestId,uint256 indexed userId,uint256 amount)",
+        "event WithdrawRejected(uint256 indexed requestId,uint256 indexed userId)",
+      ]);
+
+      const latestBlock = await rpc.getBlockNumber();
+      const fromBlock = Math.max(0, latestBlock - 100_000);
+      const chunkSize = 5_000;
+      const logs: any[] = [];
+
+      for (let start = fromBlock; start <= latestBlock; start += chunkSize) {
+        const end = Math.min(latestBlock, start + chunkSize - 1);
+        try {
+          const chunk = await rpc.getLogs({
+            address: contractAddress,
+            fromBlock: start,
+            toBlock: end,
+            topics: [[requestedTopic, approvedTopic, rejectedTopic]],
+          });
+          logs.push(...chunk);
+        } catch (chunkError) {
+          console.warn(`Withdrawal history query failed for ${start}-${end}:`, chunkError);
+        }
+      }
+
+      const rows = new Map<string, WithdrawalHistoryRow>();
+      const currentUserId = userId.toString();
+
+      for (const log of logs) {
+        try {
+          const parsed = withdrawalInterface.parseLog(log);
+          if (!parsed) continue;
+
+          if (parsed.name === "WithdrawalRequested") {
+            const eventUserId = toBigInt(parsed.args?.userId ?? parsed.args?.[1]);
+            if (eventUserId.toString() !== currentUserId) continue;
+
+            const requestId = toBigInt(parsed.args?.requestId ?? parsed.args?.[0]);
+            rows.set(requestId.toString(), {
+              requestId,
+              userId: eventUserId,
+              walletType: Number(toBigInt(parsed.args?.walletType ?? parsed.args?.[2])),
+              amount: toBigInt(parsed.args?.amount ?? parsed.args?.[3]),
+              fee: toBigInt(parsed.args?.fee ?? parsed.args?.[4]),
+              netAmount: toBigInt(parsed.args?.netAmount ?? parsed.args?.[5]),
+              status: "PENDING",
+              blockNumber: Number(log.blockNumber ?? 0),
+              timestamp: 0,
+            });
+          } else {
+            const eventUserId = toBigInt(parsed.args?.userId ?? parsed.args?.[1]);
+            if (eventUserId.toString() !== currentUserId) continue;
+
+            const requestId = toBigInt(parsed.args?.requestId ?? parsed.args?.[0]);
+            const existing = rows.get(requestId.toString());
+            if (!existing) continue;
+
+            existing.status = parsed.name === "WithdrawalApproved" ? "APPROVED" : "REJECTED";
+          }
+        } catch (decodeError) {
+          console.warn("Withdrawal event decode failed:", decodeError);
+        }
+      }
+
+      const sorted = Array.from(rows.values())
+        .sort((a, b) => b.blockNumber - a.blockNumber)
+        .slice(0, 25);
+
+      const withTimestamps = await Promise.all(
+        sorted.map(async (row) => {
+          try {
+            const block = await rpc.getBlock(row.blockNumber);
+            return { ...row, timestamp: block?.timestamp ?? 0 };
+          } catch {
+            return row;
+          }
+        })
+      );
+
+      setWithdrawalHistory(withTimestamps);
+    } catch (err) {
+      console.error("Withdrawal load failed:", err);
+      setWithdrawalHistory([]);
+      setWithdrawalError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load withdrawal configuration/history from the blockchain."
+      );
+    } finally {
+      setWithdrawalLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (activeNav === "Withdraw" && wallet && dashboard.user.id > 0n) {
+      loadWithdrawals(dashboard.user.id);
+    }
+  }, [activeNav, wallet, dashboard.user.id, loadWithdrawals]);
+
+  const user = dashboard.user;
+
+  const requestWithdrawal = useCallback(async () => {
+    if (!wallet) {
+      setWithdrawalMessage("Connect your wallet before requesting a withdrawal.");
+      return;
+    }
+
+    let amount: bigint;
+    try {
+      amount = parseUSDT(withdrawAmount.trim());
+    } catch {
+      setWithdrawalMessage("Enter a valid USDT amount.");
+      return;
+    }
+
+    if (amount <= 0n) {
+      setWithdrawalMessage("Amount must be greater than zero.");
+      return;
+    }
+
+    if (amount < withdrawalMinimum) {
+      setWithdrawalMessage(
+        `Minimum withdrawal is $${formatUsdt(withdrawalMinimum)} USDT.`
+      );
+      return;
+    }
+
+    const available =
+      withdrawWallet === 0
+        ? user.earningWallet
+        : withdrawWallet === 1
+          ? user.rankWallet
+          : user.royaltyWallet;
+
+    if (amount > available) {
+      setWithdrawalMessage("Insufficient balance in the selected wallet.");
+      return;
+    }
+
+    if (!withdrawalEnabled) {
+      setWithdrawalMessage("Withdrawals are currently disabled by the smart contract.");
+      return;
+    }
+
+    if (withdrawalHistory.some((row) => row.status === "PENDING")) {
+      setWithdrawalMessage("You already have a pending withdrawal request.");
+      return;
+    }
+
+    try {
+      setWithdrawalBusy(true);
+      setWithdrawalMessage("");
+      setWithdrawalTxHash("");
+
+      const ethereum = (window as Window & {
+        ethereum?: WalletProvider;
+      }).ethereum;
+
+      if (!ethereum) throw new Error("No compatible wallet detected.");
+
+      const browserProvider = new ethers.BrowserProvider(ethereum);
+      if (!(await isCorrectNetwork(browserProvider))) {
+        throw new Error(
+          `Wrong network. Please switch to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
+        );
+      }
+
+      const signer = await browserProvider.getSigner();
+      const signerAddress = await signer.getAddress();
+      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
+        throw new Error("Connected wallet changed. Please reconnect and try again.");
+      }
+
+      const contract = new ethers.Contract(
+        ORBI_WORLD_SPENDER_ADDRESS,
+        [
+          "function requestWithdraw(uint8 walletType,uint256 amount)",
+        ],
+        signer
+      );
+
+      const tx = await contract.requestWithdraw(withdrawWallet, amount);
+      setWithdrawalTxHash(tx.hash);
+      setWithdrawalMessage("Withdrawal request submitted. Waiting for confirmation...");
+      await tx.wait();
+
+      setWithdrawAmount("");
+      setWithdrawalMessage(
+        "Withdrawal request created successfully. It is now pending admin review."
+      );
+
+      await loadDashboard(wallet);
+      await loadWithdrawals(user.id);
+    } catch (err) {
+      console.error("Withdrawal request failed:", err);
+      setWithdrawalMessage(
+        err instanceof Error ? err.message : "Withdrawal request failed."
+      );
+    } finally {
+      setWithdrawalBusy(false);
+    }
+  }, [
+    wallet,
+    withdrawAmount,
+    withdrawalMinimum,
+    withdrawWallet,
+    user.earningWallet,
+    user.rankWallet,
+    user.royaltyWallet,
+    withdrawalEnabled,
+    withdrawalHistory,
+    loadDashboard,
+    loadWithdrawals,
+    user.id,
+  ]);
+
+  const withdrawalFeePreview = (() => {
+    if (!withdrawAmount.trim()) return 0n;
+    try {
+      const amount = parseUSDT(withdrawAmount.trim());
+      return (amount * withdrawalFeeBps) / 10000n;
+    } catch {
+      return 0n;
+    }
+  })();
+
+  const withdrawalNetPreview = (() => {
+    if (!withdrawAmount.trim()) return 0n;
+    try {
+      const amount = parseUSDT(withdrawAmount.trim());
+      const fee = (amount * withdrawalFeeBps) / 10000n;
+      return amount > fee ? amount - fee : 0n;
+    } catch {
+      return 0n;
+    }
+  })();
+
+  const activePackages = useMemo(
+    () =>
+      packages.filter(
+        (item) =>
+          dashboard.activePackageIds.some(
+            (id) => id.toString() === item.packageId.toString()
+          ) && item.status === BigInt(PACKAGE_STATUS.ACTIVE)
+      ),
+    [dashboard.activePackageIds, packages]
+  );
+
+  const totalStaked = packages.reduce(
+    (sum, item) => sum + item.amount,
+    0n
+  );
+
+  const totalPackagePaid = packages.reduce(
+    (sum, item) => sum + item.totalPaid,
+    0n
+  );
+
+  const totalEarnings =
+    user.totalROIIncome +
+    user.totalLevelIncome +
+    user.totalRankIncome +
+    user.totalRoyaltyIncome;
+
+  const referralLink =
+    typeof window !== "undefined" && wallet
+      ? `${window.location.origin}/?ref=${wallet}`
+      : "";
+
+  const copyReferral = async () => {
+    if (!referralLink) return;
+
+    try {
+      await navigator.clipboard.writeText(referralLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("Unable to copy referral link.");
+    }
+  };
+
+  const emergencyEligiblePackages = activePackages.filter((item) => {
+    const threshold = (item.amount * 70n) / 100n;
+    return item.totalPaid < threshold;
+  });
+
+  // Emergency return preview mirrors the deployed contract's 70% rule.
+  const emergencyReturn = emergencyEligiblePackages.reduce((sum, item) => {
+    const threshold = (item.amount * 70n) / 100n;
+    return sum + (threshold - item.totalPaid);
+  }, 0n);
+
+  const loadEmergencyConfig = useCallback(async () => {
+    if (!wallet) {
+      setEmergencyEnabled(false);
+      setEmergencyMessage("");
+      return;
+    }
+
+    try {
+      setEmergencyLoading(true);
+      setEmergencyMessage("");
+
+      // Read the live feature flag from the same deployed ORBI WORLD contract
+      // already used by the rest of this dashboard. No hardcoded enable/disable state.
+      const readContract = getOrbiWorldReadContract();
+      const featureConfig = await readContract.s_featureConfig();
+      const enabled = Boolean(
+        featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
+      );
+
+      setEmergencyEnabled(enabled);
+    } catch (err) {
+      console.error("Emergency Exit config load failed:", err);
+      setEmergencyEnabled(false);
+      setEmergencyMessage(
+        err instanceof Error
+          ? err.message
+          : "Unable to read Emergency Exit status from the blockchain."
+      );
+    } finally {
+      setEmergencyLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (activeNav === "Emergency Exit" && wallet) {
+      loadEmergencyConfig();
+    }
+  }, [activeNav, wallet, loadEmergencyConfig]);
+
+  const emergencyCapitalWithdraw = useCallback(async () => {
+    if (!wallet) {
+      setEmergencyMessage("Connect your wallet before using Emergency Exit.");
+      return;
+    }
+
+    if (user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)) {
+      setEmergencyMessage("Your account is already in Emergency Exit status.");
+      return;
+    }
+
+    if (!emergencyEnabled) {
+      setEmergencyMessage(
+        "Emergency Capital Withdrawal is currently disabled by the smart contract."
+      );
+      return;
+    }
+
+    if (emergencyEligiblePackages.length === 0 || emergencyReturn <= 0n) {
+      setEmergencyMessage(
+        "You are not currently eligible for Emergency Capital Withdrawal."
+      );
+      return;
+    }
+
+    try {
+      setEmergencyBusy(true);
+      setEmergencyMessage("");
+      setEmergencyTxHash("");
+
+      const ethereum = (window as Window & {
+        ethereum?: WalletProvider;
+      }).ethereum;
+
+      if (!ethereum) {
+        throw new Error("No compatible wallet detected.");
+      }
+
+      const browserProvider = new ethers.BrowserProvider(ethereum);
+
+      if (!(await isCorrectNetwork(browserProvider))) {
+        throw new Error(
+          `Wrong network. Please switch your wallet to BNB Smart Chain Testnet (Chain ID ${BSC_TESTNET_CHAIN_ID}).`
+        );
+      }
+
+      const signer = await browserProvider.getSigner();
+      const signerAddress = await signer.getAddress();
+
+      if (signerAddress.toLowerCase() !== wallet.toLowerCase()) {
+        throw new Error(
+          "Connected wallet changed. Please reconnect the correct wallet and try again."
+        );
+      }
+
+      const contract = getOrbiWorldWriteContract(signer);
+
+      // Preflight the exact on-chain operation before opening the wallet
+      // confirmation. This prevents avoidable signature prompts when the
+      // contract has become ineligible, paused, or otherwise unable to execute.
+      await contract.emergencyCapitalWithdraw.staticCall();
+
+      const tx = await contract.emergencyCapitalWithdraw();
+
+      setEmergencyTxHash(tx.hash);
+      setEmergencyMessage(
+        "Emergency Exit submitted. Waiting for blockchain confirmation..."
+      );
+
+      await tx.wait();
+
+      setEmergencyConfirmOpen(false);
+      setEmergencyMessage(
+        "Emergency Capital Withdrawal completed successfully. Refreshing on-chain data..."
+      );
+
+      // Refresh the same source-of-truth data used by My Packages/Dashboard.
+      await loadDashboard(wallet);
+      await loadEmergencyConfig();
+    } catch (err) {
+      console.error("Emergency Capital Withdrawal failed:", err);
+      setEmergencyMessage(
+        err instanceof Error
+          ? err.message
+          : "Emergency Capital Withdrawal failed. Please try again."
+      );
+    } finally {
+      setEmergencyBusy(false);
+    }
+  }, [
+    emergencyEnabled,
+    emergencyEligiblePackages.length,
+    emergencyReturn,
+    loadDashboard,
+    loadEmergencyConfig,
+    user.status,
+    wallet,
+  ]);
+
+
+  const loadSettings = useCallback(async () => {
+    if (!wallet) {
+      setSettingsLoading(false);
+      setSettingsError("");
+      setContractPaused(false);
+      setSettingsFeatures({
+        registrationEnabled: false,
+        stakingEnabled: false,
+        withdrawalEnabled: false,
+        capitalWithdrawalEnabled: false,
+      });
+      return;
+    }
+
+    try {
+      setSettingsLoading(true);
+      setSettingsError("");
+
+      const readContract = getOrbiWorldReadContract();
+      const featureConfig = await readContract.s_featureConfig();
+
+      // The deployed frontend ABI does not expose paused(); keep this
+      // status neutral instead of calling a missing contract method.
+      setContractPaused(false);
+      setSettingsFeatures({
+        registrationEnabled: Boolean(
+          featureConfig?.registrationEnabled ?? featureConfig?.[0]
+        ),
+        stakingEnabled: Boolean(
+          featureConfig?.stakingEnabled ?? featureConfig?.[1]
+        ),
+        withdrawalEnabled: Boolean(
+          featureConfig?.withdrawalEnabled ?? featureConfig?.[2]
+        ),
+        capitalWithdrawalEnabled: Boolean(
+          featureConfig?.capitalWithdrawalEnabled ?? featureConfig?.[3]
+        ),
+      });
+    } catch (err) {
+      console.error("Settings load failed:", err);
+      setSettingsError(
+        err instanceof Error
+          ? err.message
+          : "Unable to read account settings from the blockchain."
+      );
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (activeNav === "Settings" && wallet) {
+      loadSettings();
+    }
+  }, [activeNav, wallet, loadSettings]);
+
+  const copySettingsWallet = useCallback(async () => {
+    if (!wallet) return;
+
+    try {
+      await navigator.clipboard.writeText(wallet);
+      setSettingsCopied(true);
+      window.setTimeout(() => setSettingsCopied(false), 1800);
+    } catch {
+      setSettingsError("Unable to copy wallet address.");
+    }
+  }, [wallet]);
+
+  const disconnectWallet = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("orbi.dashboard.wallet");
+    }
+
+    setWallet("");
+    setProvider(null);
+    setDashboard(EMPTY_DASHBOARD);
+    setPackages([]);
+    setUsdtBalance(0n);
+    setNativeBalance(0n);
+    setSettingsError("");
+    setSettingsCopied(false);
+    setActiveNav("Dashboard");
+    setMobileOpen(false);
+  }, []);
+
+  const renderMain = () => {
+    if (activeNav === "My Packages") {
+      const activeCount = activePackages.length;
+      const closedCount = packages.filter(
+        (item) => item.status === BigInt(PACKAGE_STATUS.CLOSED)
+      ).length;
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN PACKAGES
+              </div>
+              <h1>My Packages<span>.</span></h1>
+
+            </div>
+
+            <div className="orbi-package-actions">
+              <button
+                className="orbi-stake-btn"
+                onClick={openStakeModal}
+                disabled={!wallet || loading}
+              >
+                <Icon name="package" size={18} />
+                {user.status === BigInt(USER_STATUS.ACTIVE)
+                  ? "Top Up Package"
+                  : "Stake Package"}
+              </button>
+              <button
+                className="orbi-refresh-btn"
+                onClick={refresh}
+                disabled={loading}
+              >
+                <Icon name="refresh" size={17} />
+                {loading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+          </section>
+
+          {networkError && (
+            <div className="orbi-alert orbi-alert-warning">
+              <Icon name="alert" size={18} />
+              <span>{networkError}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-package-overview-grid">
+                <div>
+                  <span>TOTAL PACKAGES</span>
+                  <strong>{packages.length}</strong>
+
+                </div>
+                <div>
+                  <span>ACTIVE PACKAGES</span>
+                  <strong>{activeCount}</strong>
+
+                </div>
+                <div>
+                  <span>CLOSED PACKAGES</span>
+                  <strong>{closedCount}</strong>
+
+                </div>
+                <div>
+                  <span>TOTAL STAKED</span>
+                  <strong>${formatUsdt(totalStaked)}</strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section orbi-packages-page">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PACKAGE PORTFOLIO</span>
+                    <h2>Your on-chain packages</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>TOTAL PAID</span>
+                    <strong>${formatUsdt(totalPackagePaid)}</strong>
+                  </div>
+                </div>
+
+                {loading && packages.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="refresh" size={24} />
+                    <span>Loading packages from blockchain...</span>
+                  </div>
+                ) : packages.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="package" size={24} />
+                    <span>No packages found for this wallet.</span>
+
+                  </div>
+                ) : (
+                  <div className="orbi-package-grid orbi-package-grid-page">
+                    {packages.map((item) => {
+                      const threshold = (item.amount * 70n) / 100n;
+                      const progress =
+                        item.maxPayout > 0n
+                          ? Math.min(
+                              100,
+                              Number(
+                                (item.totalPaid * 10000n) / item.maxPayout
+                              ) / 100
+                            )
+                          : 0;
+                      const emergencyEligible =
+                        item.status === BigInt(PACKAGE_STATUS.ACTIVE) &&
+                        !item.emergencyClosed &&
+                        item.totalPaid < threshold;
+
+                      return (
+                        <article
+                          className={`orbi-package-item orbi-package-page-item ${
+                            item.status === BigInt(PACKAGE_STATUS.ACTIVE)
+                              ? "is-active"
+                              : ""
+                          }`}
+                          key={item.packageId.toString()}
+                        >
+                          <div className="orbi-package-top">
+                            <div>
+                              <span>PACKAGE ID</span>
+                              <strong>#{item.packageId.toString()}</strong>
+                            </div>
+                            <span
+                              className={`orbi-package-status ${
+                                item.status === BigInt(PACKAGE_STATUS.ACTIVE)
+                                  ? "active"
+                                  : "closed"
+                              }`}
+                            >
+                              {packageStatusLabel(
+                                item.status,
+                                item.emergencyClosed
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="orbi-package-amount">
+                            <span>STAKED AMOUNT</span>
+                            <strong>${formatUsdt(item.amount)}</strong>
+                          </div>
+
+                          <div className="orbi-package-detail-row">
+                            <div>
+                              <span>MAX PAYOUT</span>
+                              <b>${formatUsdt(item.maxPayout)}</b>
+                            </div>
+                            <div>
+                              <span>TOTAL PAID</span>
+                              <b>${formatUsdt(item.totalPaid)}</b>
+                            </div>
+                          </div>
+
+                          <div className="orbi-progress-wrap">
+                            <div className="orbi-progress-label">
+                              <span>2X PAYOUT PROGRESS</span>
+                              <b>{progress.toFixed(1)}%</b>
+                            </div>
+                            <div className="orbi-progress">
+                              <span style={{ width: `${progress}%` }} />
+                            </div>
+                            <div className="orbi-progress-values">
+                              <span>${formatUsdt(item.totalPaid)} paid</span>
+                              <span>${formatUsdt(item.maxPayout)} max</span>
+                            </div>
+                          </div>
+
+                          <div className="orbi-package-stats">
+                            <div>
+                              <span>ROI PAID</span>
+                              <b>${formatUsdt(item.roiPaid)}</b>
+                            </div>
+                            <div>
+                              <span>LEVEL PAID</span>
+                              <b>${formatUsdt(item.levelPaid)}</b>
+                            </div>
+                            <div>
+                              <span>STARTED</span>
+                              <b>{formatDate(item.startTime)}</b>
+                            </div>
+                          </div>
+
+                          <div className="orbi-package-meta-grid">
+                            <div>
+                              <span>CLOSED</span>
+                              <b>{formatDate(item.closedTime)}</b>
+                            </div>
+                            <div>
+                              <span>EMERGENCY CLOSED</span>
+                              <b>{item.emergencyClosed ? "YES" : "NO"}</b>
+                            </div>
+                          </div>
+
+                          <div
+                            className={`orbi-emergency-status ${
+                              emergencyEligible ? "eligible" : "locked"
+                            }`}
+                          >
+                            <div>
+                              <span>EMERGENCY EXIT ELIGIBILITY</span>
+                              <strong>
+                                {emergencyEligible ? "ELIGIBLE" : "LOCKED"}
+                              </strong>
+                            </div>
+
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "My Team") {
+      const totalDirects = dashboard.user.directCount;
+      const activeDirects = dashboard.user.activeDirectCount;
+      const inactiveDirects =
+        totalDirects > activeDirects ? totalDirects - activeDirects : 0n;
+      const totalIndirects = teamIndirectCount;
+
+      const refreshTeam = async () => {
+        if (!wallet || dashboard.user.id === 0n) return;
+        setTeamLoadedFor("");
+        await loadMyTeam(dashboard.user.id, wallet);
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN TEAM
+              </div>
+              <h1>My Team<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={refreshTeam}
+              disabled={teamLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {teamLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {networkError && (
+            <div className="orbi-alert orbi-alert-warning">
+              <Icon name="alert" size={18} />
+              <span>{networkError}</span>
+            </div>
+          )}
+
+          {teamError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{teamError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL DIRECTS</span>
+                  <strong>{totalDirects.toString()}</strong>
+
+                </div>
+                <div>
+                  <span>TOTAL INDIRECTS</span>
+                  <strong>{totalIndirects.toString()}</strong>
+
+                </div>
+                <div>
+                  <span>ACTIVE DIRECTS</span>
+                  <strong>{activeDirects.toString()}</strong>
+
+                </div>
+                <div>
+                  <span>INACTIVE DIRECTS</span>
+                  <strong>{inactiveDirects.toString()}</strong>
+
+                </div>
+                <div>
+                  <span>TEAM BUSINESS</span>
+                  <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section" style={{ width: "100%" }}>
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">DIRECT MEMBERS</span>
+                    <h2>Your direct team</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{teamMembers.length} direct members loaded</span>
+                  </div>
+                </div>
+
+                {teamLoading ? (
+                  <div className="orbi-empty-state">
+                    <div className="orbi-empty-icon">
+                      <Icon name="refresh" size={24} />
+                    </div>
+                    <h3>Loading your team...</h3>
+
+                  </div>
+                ) : teamMembers.length === 0 ? (
+                  <div className="orbi-empty-state">
+                    <div className="orbi-empty-icon">
+                      <Icon name="team" size={24} />
+                    </div>
+                    <h3>No direct members yet</h3>
+
+                  </div>
+                ) : (
+                  <div style={{ width: "100%", overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        minWidth: 1080,
+                        borderCollapse: "collapse",
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          {[
+                            "USER ID",
+                            "WALLET",
+                            "STATUS",
+                            "DIRECTS",
+                            "ACTIVE DIRECTS",
+                            "LIFETIME BUSINESS",
+                            "RANK",
+                            "ACTIVITY",
+                          ].map((heading) => (
+                            <th
+                              key={heading}
+                              style={{
+                                textAlign: "left",
+                                padding: "14px 12px",
+                                borderBottom: "1px solid rgba(148,163,184,.18)",
+                                whiteSpace: "nowrap",
+                                fontSize: 11,
+                                letterSpacing: ".08em",
+                                opacity: 0.7,
+                              }}
+                            >
+                              {heading}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamMembers.map((member) => {
+                          const isActive =
+                            member.status === BigInt(USER_STATUS.ACTIVE);
+                          return (
+                            <tr key={member.id.toString()}>
+                              <td style={{ padding: "15px 12px", fontWeight: 700 }}>
+                                #{member.id.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                {shortAddress(member.wallet)}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 7,
+                                    padding: "6px 9px",
+                                    borderRadius: 999,
+                                    background: isActive
+                                      ? "rgba(34,197,94,.12)"
+                                      : "rgba(148,163,184,.10)",
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: 6,
+                                      height: 6,
+                                      borderRadius: "50%",
+                                      background: isActive ? "#22c55e" : "#94a3b8",
+                                    }}
+                                  />
+                                  {member.activityLabel}
+                                </span>
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.directCount.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.activeDirectCount.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                ${formatUsdt(member.lifetimeBusiness)}
+                              </td>
+                              <td style={{ padding: "15px 12px" }}>
+                                {member.rank.toString()}
+                              </td>
+                              <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                {member.activityLabel}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Level Income") {
+      const qualifiedLevelCount =
+        user.status === BigInt(USER_STATUS.ACTIVE) && activePackages.length > 0
+          ? Math.min(10, Number(user.activeDirectCount))
+          : 0;
+
+      const formatLevelPercent = (bps: bigint) => {
+        const percent = Number(bps) / 100;
+        if (!Number.isFinite(percent)) return "0%";
+        return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(2)}%`;
+      };
+
+      const formatHistoryDate = (timestamp: number) => {
+        if (!timestamp) return "—";
+        return new Date(timestamp * 1000).toLocaleDateString("en-US", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN INCOME
+              </div>
+              <h1>Level Income<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={() => loadLevelIncome(user.id)}
+              disabled={levelIncomeLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {levelIncomeLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {levelIncomeError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{levelIncomeError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid orbi-level-overview"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL LEVEL INCOME</span>
+                  <strong>${formatUsdt(user.totalLevelIncome)}</strong>
+
+                </div>
+                <div>
+                  <span>CURRENT LEVEL</span>
+                  <strong>{qualifiedLevelCount > 0 ? `L${qualifiedLevelCount}` : "NONE"}</strong>
+
+                </div>
+                <div>
+                  <span>ACTIVE DIRECTS</span>
+                  <strong>{user.activeDirectCount.toString()}</strong>
+
+                </div>
+                <div>
+                  <span>LEVEL SYSTEM</span>
+                  <strong>{levelIncomeEnabled ? "ACTIVE" : "OFF"}</strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section orbi-level-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">LEVEL INCOME PLAN</span>
+                    <h2>10-Level qualification</h2>
+
+                  </div>
+                  <div className={`orbi-level-system-pill ${levelIncomeEnabled ? "is-on" : "is-off"}`}>
+                    {levelIncomeEnabled ? "ENABLED" : "DISABLED"}
+                  </div>
+                </div>
+
+                <div className="orbi-level-table-wrap">
+                  <table className="orbi-level-table">
+                    <thead>
+                      <tr>
+                        <th>LEVEL</th>
+                        <th>RATE</th>
+                        <th>REQUIRED</th>
+                        <th>STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: 10 }, (_, index) => {
+                        const level = index + 1;
+                        const unlocked =
+                          levelIncomeEnabled &&
+                          user.status === BigInt(USER_STATUS.ACTIVE) &&
+                          activePackages.length > 0 &&
+                          Number(user.activeDirectCount) >= level;
+
+                        return (
+                          <tr key={level} className={unlocked ? "is-unlocked" : ""}>
+                            <td><strong>L{level}</strong></td>
+                            <td><strong>{formatLevelPercent(levelIncomeBps[index] ?? 0n)}</strong></td>
+                            <td>{level} Active Direct{level === 1 ? "" : "s"}</td>
+                            <td>
+                              <span className={`orbi-level-status ${unlocked ? "unlocked" : "locked"}`}>
+                                <span />
+                                {unlocked ? "UNLOCKED" : "LOCKED"}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section orbi-level-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PAYOUT HISTORY</span>
+                    <h2>Recent Level Income</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{levelIncomeHistory.length} events indexed</span>
+                  </div>
+                </div>
+
+                {levelIncomeLoading ? (
+                  <div className="orbi-no-data">
+                    <Icon name="refresh" size={24} />
+                    <span>Reading Level Income events from blockchain...</span>
+                  </div>
+                ) : levelIncomeHistory.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="money" size={24} />
+                    <span>No Level Income payouts found yet.</span>
+
+                  </div>
+                ) : (
+                  <div className="orbi-level-history-wrap">
+                    <table className="orbi-level-table">
+                      <thead>
+                        <tr>
+                          <th>LEVEL</th>
+                          <th>FROM USER</th>
+                          <th>AMOUNT</th>
+                          <th>DATE</th>
+                          <th>BLOCK</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {levelIncomeHistory.map((entry, index) => (
+                          <tr key={`${entry.blockNumber}-${index}`}>
+                            <td><strong>L{entry.level.toString()}</strong></td>
+                            <td>#{entry.fromUserId.toString()}</td>
+                            <td><strong>${formatUsdt(entry.amount)}</strong></td>
+                            <td>{formatHistoryDate(entry.timestamp)}</td>
+                            <td>#{entry.blockNumber.toLocaleString("en-US")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Rank & Rewards") {
+      const currentRank = Math.min(
+        rankRequirements.length,
+        Math.max(0, Number(user.rank))
+      );
+      const nextRankIndex = currentRank;
+      const nextRequirement = rankRequirements[nextRankIndex];
+      const isMaxRank = !nextRequirement && rankRequirements.length > 0;
+
+      const powerBusiness = user.powerLegBusiness;
+      const otherBusiness = user.otherLegBusiness;
+
+      const powerProgress = nextRequirement && nextRequirement.requiredPowerLeg > 0n
+        ? Math.min(
+            100,
+            Number(
+              (powerBusiness * 10000n) / nextRequirement.requiredPowerLeg
+            ) / 100
+          )
+        : isMaxRank
+          ? 100
+          : 0;
+
+      const otherProgress = nextRequirement && nextRequirement.requiredOtherLeg > 0n
+        ? Math.min(
+            100,
+            Number(
+              (otherBusiness * 10000n) / nextRequirement.requiredOtherLeg
+            ) / 100
+          )
+        : isMaxRank
+          ? 100
+          : 0;
+
+      const overallProgress = Math.min(powerProgress, otherProgress);
+
+      const formatRankBusiness = (value: bigint) => `$${formatUsdt(value)}`;
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN ACHIEVEMENT
+              </div>
+              <h1>Rank & Rewards<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadRankRewards}
+              disabled={rankLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {rankLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {rankError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{rankError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>CURRENT RANK</span>
+                  <strong>{currentRank === 0 ? "NONE" : `R${currentRank}`}</strong>
+
+                </div>
+                <div>
+                  <span>NEXT RANK</span>
+                  <strong>{isMaxRank ? "MAX" : `R${nextRankIndex + 1}`}</strong>
+
+                </div>
+                <div>
+                  <span>RANK WALLET</span>
+                  <strong>${formatUsdt(user.rankWallet)}</strong>
+
+                </div>
+                <div>
+                  <span>REWARD SYSTEM</span>
+                  <strong>{rankRewardEnabled ? "ACTIVE" : "OFF"}</strong>
+
+                </div>
+              </section>
+
+              {!rankLoading && rankRequirements.length === 0 ? (
+                <section className="orbi-card orbi-package-section">
+                  <div className="orbi-no-data">
+                    <Icon name="trophy" size={24} />
+                    <span>No rank configuration could be loaded.</span>
+
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">CURRENT PROGRESS</span>
+                        <h2>Path to {isMaxRank ? "maximum rank" : `Rank ${nextRankIndex + 1}`}</h2>
+
+                      </div>
+                      <div className="orbi-package-summary">
+                        <span>OVERALL PROGRESS</span>
+                        <strong>{overallProgress.toFixed(1)}%</strong>
+                      </div>
+                    </div>
+
+                    {isMaxRank ? (
+                      <div className="orbi-no-data">
+                        <Icon name="trophy" size={24} />
+                        <span>Maximum rank achieved.</span>
+
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 18 }}>
+                        {[
+                          {
+                            label: "POWER LEG BUSINESS",
+                            current: powerBusiness,
+                            required: nextRequirement?.requiredPowerLeg ?? 0n,
+                            progress: powerProgress,
+                          },
+                          {
+                            label: "OTHER LEG BUSINESS",
+                            current: otherBusiness,
+                            required: nextRequirement?.requiredOtherLeg ?? 0n,
+                            progress: otherProgress,
+                          },
+                        ].map((leg) => (
+                          <div key={leg.label}>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 16,
+                                marginBottom: 8,
+                              }}
+                            >
+                              <span style={{ fontSize: 11, letterSpacing: ".08em", opacity: 0.72 }}>
+                                {leg.label}
+                              </span>
+                              <strong style={{ fontSize: 13 }}>
+                                {formatRankBusiness(leg.current)} / {formatRankBusiness(leg.required)}
+                              </strong>
+                            </div>
+                            <div
+                              style={{
+                                height: 8,
+                                borderRadius: 999,
+                                background: "rgba(148,163,184,.12)",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${leg.progress}%`,
+                                  height: "100%",
+                                  borderRadius: 999,
+                                  background: "linear-gradient(90deg,#22c55e,#3b82f6)",
+                                }}
+                              />
+                            </div>
+                            <div style={{ marginTop: 7, fontSize: 11, opacity: 0.62 }}>
+                              {leg.progress.toFixed(1)}% complete
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">RANK PLAN</span>
+                        <h2>6-Level rank qualification</h2>
+
+                      </div>
+                      <div className="orbi-package-summary">
+                        <span>{rankRequirements.length} ranks configured</span>
+                      </div>
+                    </div>
+
+                    <div style={{ width: "100%", overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          minWidth: 820,
+                          borderCollapse: "collapse",
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            {["RANK", "POWER LEG REQUIRED", "OTHER LEG REQUIRED", "REWARD", "STATUS"].map((heading) => (
+                              <th
+                                key={heading}
+                                style={{
+                                  textAlign: "left",
+                                  padding: "14px 12px",
+                                  borderBottom: "1px solid rgba(148,163,184,.18)",
+                                  whiteSpace: "nowrap",
+                                  fontSize: 11,
+                                  letterSpacing: ".08em",
+                                  opacity: 0.7,
+                                }}
+                              >
+                                {heading}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rankRequirements.map((requirement, index) => {
+                            const rankNumber = index + 1;
+                            const achieved = currentRank >= rankNumber;
+                            const isNext = currentRank === index;
+
+                            return (
+                              <tr key={rankNumber}>
+                                <td style={{ padding: "15px 12px", fontWeight: 700 }}>
+                                  R{rankNumber}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                  ${formatUsdt(requirement.requiredPowerLeg)}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                  ${formatUsdt(requirement.requiredOtherLeg)}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap", fontWeight: 700 }}>
+                                  ${formatUsdt(requirement.reward)}
+                                </td>
+                                <td style={{ padding: "15px 12px" }}>
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 7,
+                                      padding: "6px 10px",
+                                      borderRadius: 999,
+                                      background: achieved
+                                        ? "rgba(34,197,94,.12)"
+                                        : isNext
+                                          ? "rgba(59,130,246,.12)"
+                                          : "rgba(148,163,184,.10)",
+                                      fontSize: 11,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: "50%",
+                                        background: achieved
+                                          ? "#22c55e"
+                                          : isNext
+                                            ? "#3b82f6"
+                                            : "#94a3b8",
+                                      }}
+                                    />
+                                    {achieved ? "ACHIEVED" : isNext ? "NEXT" : "LOCKED"}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">REWARD SUMMARY</span>
+                        <h2>Rank reward wallet</h2>
+
+                      </div>
+                      <Icon name="trophy" size={22} />
+                    </div>
+
+                    <div className="orbi-income-list">
+                      <IncomeRow label="Rank Wallet" value={user.rankWallet} />
+                      <IncomeRow label="Total Rank Income" value={user.totalRankIncome} />
+                    </div>
+                  </section>
+                </>
+              )}
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Royalty") {
+      const currentRoyalty = Math.min(
+        royaltyRequirements.length,
+        Math.max(0, Number(user.royalty))
+      );
+      const nextRoyaltyIndex = currentRoyalty;
+      const nextRoyaltyRequirement = royaltyRequirements[nextRoyaltyIndex];
+      const isMaxRoyalty =
+        royaltyRequirements.length > 0 && !nextRoyaltyRequirement;
+
+      const formatRoyaltyPercent = (bps: bigint) => {
+        const percent = Number(bps) / 100;
+        if (!Number.isFinite(percent)) return "0%";
+        return Number.isInteger(percent)
+          ? `${percent}%`
+          : `${percent.toFixed(2)}%`;
+      };
+
+      const royaltyLevelLabel = (level: number) => {
+        if (level === 1) return "1%";
+        if (level === 2) return "2%";
+        return "NONE";
+      };
+
+      const lifetimeProgress =
+        nextRoyaltyRequirement &&
+        nextRoyaltyRequirement.requiredLifetimeBusiness > 0n
+          ? Math.min(
+              100,
+              Number(
+                (
+                  user.lifetimeBusiness *
+                  10000n
+                ) / nextRoyaltyRequirement.requiredLifetimeBusiness
+              ) / 100
+            )
+          : isMaxRoyalty
+            ? 100
+            : 0;
+
+      const monthlyProgress =
+        nextRoyaltyRequirement &&
+        nextRoyaltyRequirement.requiredMonthlyBusiness > 0n
+          ? Math.min(
+              100,
+              Number(
+                (
+                  user.monthlyBusiness *
+                  10000n
+                ) / nextRoyaltyRequirement.requiredMonthlyBusiness
+              ) / 100
+            )
+          : isMaxRoyalty
+            ? 100
+            : 0;
+
+      const directProgress =
+        nextRoyaltyRequirement && nextRoyaltyRequirement.minimumActiveDirects > 0n
+          ? Math.min(
+              100,
+              Number(
+                (
+                  user.activeDirectCount *
+                  10000n
+                ) / nextRoyaltyRequirement.minimumActiveDirects
+              ) / 100
+            )
+          : isMaxRoyalty
+            ? 100
+            : 0;
+
+      const overallRoyaltyProgress = Math.min(
+        lifetimeProgress,
+        monthlyProgress,
+        directProgress
+      );
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN ROYALTY
+              </div>
+              <h1>Royalty<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadRoyalty}
+              disabled={royaltyLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {royaltyLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {royaltyError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{royaltyError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>CURRENT ROYALTY</span>
+                  <strong>{royaltyLevelLabel(currentRoyalty)}</strong>
+
+                </div>
+                <div>
+                  <span>NEXT ROYALTY</span>
+                  <strong>
+                    {isMaxRoyalty
+                      ? "MAX"
+                      : nextRoyaltyRequirement
+                        ? royaltyLevelLabel(nextRoyaltyIndex + 1)
+                        : "—"}
+                  </strong>
+
+                </div>
+                <div>
+                  <span>ROYALTY WALLET</span>
+                  <strong>${formatUsdt(user.royaltyWallet)}</strong>
+
+                </div>
+                <div>
+                  <span>ROYALTY SYSTEM</span>
+                  <strong>{royaltyEnabled ? "ACTIVE" : "OFF"}</strong>
+
+                </div>
+              </section>
+
+              {royaltyLoading && royaltyRequirements.length === 0 ? (
+                <section className="orbi-card orbi-package-section">
+                  <div className="orbi-no-data">
+                    <Icon name="refresh" size={24} />
+                    <span>Loading Royalty configuration from blockchain...</span>
+                  </div>
+                </section>
+              ) : royaltyRequirements.length === 0 ? (
+                <section className="orbi-card orbi-package-section">
+                  <div className="orbi-no-data">
+                    <Icon name="diamond" size={24} />
+                    <span>No Royalty configuration could be loaded.</span>
+
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">CURRENT PROGRESS</span>
+                        <h2>
+                          {isMaxRoyalty
+                            ? "Royalty qualification complete"
+                            : `Path to ${royaltyLevelLabel(nextRoyaltyIndex + 1)}`}
+                        </h2>
+
+                      </div>
+                      <div className="orbi-package-summary">
+                        <span>OVERALL PROGRESS</span>
+                        <strong>{overallRoyaltyProgress.toFixed(1)}%</strong>
+                      </div>
+                    </div>
+
+                    {isMaxRoyalty ? (
+                      <div className="orbi-no-data">
+                        <Icon name="diamond" size={24} />
+                        <span>Maximum Royalty level achieved.</span>
+
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 18 }}>
+                        {[
+                          {
+                            label: "LIFETIME BUSINESS",
+                            current: user.lifetimeBusiness,
+                            required: nextRoyaltyRequirement?.requiredLifetimeBusiness ?? 0n,
+                            progress: lifetimeProgress,
+                          },
+                          {
+                            label: "MONTHLY BUSINESS",
+                            current: user.monthlyBusiness,
+                            required: nextRoyaltyRequirement?.requiredMonthlyBusiness ?? 0n,
+                            progress: monthlyProgress,
+                          },
+                          {
+                            label: "ACTIVE DIRECTS",
+                            current: user.activeDirectCount,
+                            required: nextRoyaltyRequirement?.minimumActiveDirects ?? 0n,
+                            progress: directProgress,
+                          },
+                        ].map((item) => (
+                          <div key={item.label}>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 16,
+                                marginBottom: 8,
+                              }}
+                            >
+                              <span style={{ fontSize: 11, letterSpacing: ".08em", opacity: 0.72 }}>
+                                {item.label}
+                              </span>
+                              <strong style={{ fontSize: 13 }}>
+                                {item.label === "ACTIVE DIRECTS"
+                                  ? `${item.current.toString()} / ${item.required.toString()}`
+                                  : `$${formatUsdt(item.current)} / $${formatUsdt(item.required)}`}
+                              </strong>
+                            </div>
+                            <div
+                              style={{
+                                height: 8,
+                                borderRadius: 999,
+                                background: "rgba(148,163,184,.12)",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${item.progress}%`,
+                                  height: "100%",
+                                  borderRadius: 999,
+                                  background: "linear-gradient(90deg,#22c55e,#3b82f6)",
+                                }}
+                              />
+                            </div>
+                            <div style={{ marginTop: 7, fontSize: 11, opacity: 0.62 }}>
+                              {item.progress.toFixed(1)}% complete
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">ROYALTY PLAN</span>
+                        <h2>Royalty qualification</h2>
+
+                      </div>
+                      <div className="orbi-package-summary">
+                        <span>{royaltyRequirements.length} levels configured</span>
+                      </div>
+                    </div>
+
+                    <div style={{ width: "100%", overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          minWidth: 900,
+                          borderCollapse: "collapse",
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            {[
+                              "LEVEL",
+                              "RATE",
+                              "LIFETIME BUSINESS",
+                              "MONTHLY BUSINESS",
+                              "ACTIVE DIRECTS",
+                              "STATUS",
+                            ].map((heading) => (
+                              <th
+                                key={heading}
+                                style={{
+                                  textAlign: "left",
+                                  padding: "14px 12px",
+                                  borderBottom: "1px solid rgba(148,163,184,.18)",
+                                  whiteSpace: "nowrap",
+                                  fontSize: 11,
+                                  letterSpacing: ".08em",
+                                  opacity: 0.7,
+                                }}
+                              >
+                                {heading}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {royaltyRequirements.map((requirement, index) => {
+                            const levelNumber = index + 1;
+                            const achieved = currentRoyalty >= levelNumber;
+                            const isNext = currentRoyalty === index;
+
+                            return (
+                              <tr key={levelNumber}>
+                                <td style={{ padding: "15px 12px", fontWeight: 700 }}>
+                                  R{levelNumber}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap", fontWeight: 700 }}>
+                                  {formatRoyaltyPercent(requirement.royaltyBps)}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                  ${formatUsdt(requirement.requiredLifetimeBusiness)}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                  ${formatUsdt(requirement.requiredMonthlyBusiness)}
+                                </td>
+                                <td style={{ padding: "15px 12px", whiteSpace: "nowrap" }}>
+                                  {requirement.minimumActiveDirects.toString()}
+                                </td>
+                                <td style={{ padding: "15px 12px" }}>
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 7,
+                                      padding: "6px 10px",
+                                      borderRadius: 999,
+                                      background: achieved
+                                        ? "rgba(34,197,94,.12)"
+                                        : isNext
+                                          ? "rgba(59,130,246,.12)"
+                                          : "rgba(148,163,184,.10)",
+                                      fontSize: 11,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: "50%",
+                                        background: achieved
+                                          ? "#22c55e"
+                                          : isNext
+                                            ? "#3b82f6"
+                                            : "#94a3b8",
+                                      }}
+                                    />
+                                    {achieved ? "ACHIEVED" : isNext ? "NEXT" : "LOCKED"}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section className="orbi-card orbi-package-section">
+                    <div className="orbi-card-head">
+                      <div>
+                        <span className="orbi-section-kicker">ROYALTY SUMMARY</span>
+                        <h2>Royalty reward wallet</h2>
+
+                      </div>
+                      <Icon name="diamond" size={22} />
+                    </div>
+
+                    <div className="orbi-income-list">
+                      <IncomeRow label="Royalty Wallet" value={user.royaltyWallet} />
+                      <IncomeRow label="Total Royalty Income" value={user.totalRoyaltyIncome} />
+                      <IncomeRow label="Current Monthly Business" value={user.monthlyBusiness} />
+                    </div>
+                  </section>
+                </>
+              )}
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Earnings") {
+      const roiIncome = user.totalROIIncome;
+      const levelIncome = user.totalLevelIncome;
+      const rankIncome = user.totalRankIncome;
+      const royaltyIncome = user.totalRoyaltyIncome;
+      const totalGenerated =
+        roiIncome + levelIncome + rankIncome + royaltyIncome;
+
+      const packageRoiPaid = packages.reduce(
+        (sum, item) => sum + item.roiPaid,
+        0n
+      );
+      const packageLevelPaid = packages.reduce(
+        (sum, item) => sum + item.levelPaid,
+        0n
+      );
+
+      const incomeRows = [
+        { label: "ROI Income", value: roiIncome, icon: "package" },
+        { label: "Level Income", value: levelIncome, icon: "link" },
+        { label: "Rank Income", value: rankIncome, icon: "trophy" },
+        { label: "Royalty Income", value: royaltyIncome, icon: "diamond" },
+      ];
+
+      const incomeShare = (value: bigint) => {
+        if (totalGenerated <= 0n) return 0;
+        return Math.min(
+          100,
+          Number((value * 10000n) / totalGenerated) / 100
+        );
+      };
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN EARNINGS
+              </div>
+              <h1>Earnings<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={refresh}
+              disabled={loading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {loading ? "Refreshing..." : "Refresh"}
+            </button>
+          </section>
+
+          {networkError && (
+            <div className="orbi-alert orbi-alert-warning">
+              <Icon name="alert" size={18} />
+              <span>{networkError}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>TOTAL EARNINGS</span>
+                  <strong>${formatUsdt(totalGenerated)}</strong>
+
+                </div>
+                <div>
+                  <span>AVAILABLE EARNINGS</span>
+                  <strong>${formatUsdt(user.earningWallet)}</strong>
+
+                </div>
+                <div>
+                  <span>TOTAL WITHDRAWN</span>
+                  <strong>${formatUsdt(user.totalWithdrawn)}</strong>
+
+                </div>
+                <div>
+                  <span>INCOME SOURCES</span>
+                  <strong>4</strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">INCOME BREAKDOWN</span>
+                      <h2>Where your earnings came from</h2>
+
+                    </div>
+                    <Icon name="money" size={22} />
+                  </div>
+
+                  <div className="orbi-income-list">
+                    {incomeRows.map((row) => {
+                      const share = incomeShare(row.value);
+                      return (
+                        <div key={row.label} style={{ padding: "13px 0" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 12,
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 9,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  display: "grid",
+                                  placeItems: "center",
+                                  borderRadius: 8,
+                                  color: "#9bcfff",
+                                  background: "rgba(22,140,255,.08)",
+                                  border: "1px solid rgba(22,140,255,.14)",
+                                }}
+                              >
+                                <Icon name={row.icon} size={14} />
+                              </span>
+                              <span style={{ color: "#b8c7d9", fontSize: 12 }}>
+                                {row.label}
+                              </span>
+                            </div>
+                            <strong style={{ fontSize: 13 }}>
+                              ${formatUsdt(row.value)}
+                            </strong>
+                          </div>
+                          <div
+                            style={{
+                              height: 5,
+                              marginTop: 9,
+                              borderRadius: 999,
+                              overflow: "hidden",
+                              background: "rgba(148,163,184,.10)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${share}%`,
+                                height: "100%",
+                                borderRadius: 999,
+                                background:
+                                  "linear-gradient(90deg,#168cff,#7357ff)",
+                              }}
+                            />
+                          </div>
+                          <div
+                            style={{
+                              marginTop: 5,
+                              color: "var(--od-muted-2)",
+                              fontSize: 9,
+                            }}
+                          >
+                            {share.toFixed(1)}% of total earnings
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">WALLET SUMMARY</span>
+                      <h2>Income wallets</h2>
+
+                    </div>
+                    <Icon name="wallet" size={22} />
+                  </div>
+
+                  <div className="orbi-income-list">
+                    <IncomeRow label="Earning Wallet" value={user.earningWallet} />
+                    <IncomeRow label="Rank Wallet" value={user.rankWallet} />
+                    <IncomeRow label="Royalty Wallet" value={user.royaltyWallet} />
+                    <IncomeRow label="Total Withdrawn" value={user.totalWithdrawn} />
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PACKAGE INCOME</span>
+                    <h2>ROI & Level earnings from packages</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>{packages.length} packages</span>
+                    <strong>${formatUsdt(packageRoiPaid + packageLevelPaid)}</strong>
+                  </div>
+                </div>
+
+                <div
+                  className="orbi-package-overview-grid"
+                  style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+                >
+                  <div>
+                    <span>ROI PAID</span>
+                    <strong>${formatUsdt(packageRoiPaid)}</strong>
+
+                  </div>
+                  <div>
+                    <span>LEVEL PAID</span>
+                    <strong>${formatUsdt(packageLevelPaid)}</strong>
+
+                  </div>
+                  <div>
+                    <span>ACTIVE PACKAGES</span>
+                    <strong>{activePackages.length}</strong>
+
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">EARNINGS ACCOUNTING</span>
+                    <h2>On-chain earnings position</h2>
+
+                  </div>
+                  <Icon name="activity" size={22} />
+                </div>
+
+                <div className="orbi-activity-grid">
+                  <div>
+                    <span>TOTAL GENERATED</span>
+                    <strong>${formatUsdt(totalGenerated)}</strong>
+                  </div>
+                  <div>
+                    <span>AVAILABLE IN EARNING WALLET</span>
+                    <strong>${formatUsdt(user.earningWallet)}</strong>
+                  </div>
+                  <div>
+                    <span>RANK REWARD BALANCE</span>
+                    <strong>${formatUsdt(user.rankWallet)}</strong>
+                  </div>
+                  <div>
+                    <span>ROYALTY REWARD BALANCE</span>
+                    <strong>${formatUsdt(user.royaltyWallet)}</strong>
+                  </div>
+                </div>
+
+                <div className="orbi-activity-foot">
+                  <span>
+                    All financial values shown here are sourced from the connected
+                    wallet's ORBI WORLD profile and package records.
+                  </span>
+                  <a
+                    href={`${BLOCK_EXPLORER}/address/${wallet}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open wallet on explorer
+                    <Icon name="external" size={14} />
+                  </a>
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Withdraw") {
+      const selectedAvailable =
+        withdrawWallet === 0
+          ? user.earningWallet
+          : withdrawWallet === 1
+            ? user.rankWallet
+            : user.royaltyWallet;
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ON-CHAIN WITHDRAWAL
+              </div>
+              <h1>Withdraw<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={() => loadWithdrawals(user.id)}
+              disabled={withdrawalLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {withdrawalLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {withdrawalError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{withdrawalError}</span>
+            </div>
+          )}
+
+          {withdrawalMessage && (
+            <div className={`orbi-alert ${withdrawalMessage.toLowerCase().includes("successfully") || withdrawalMessage.toLowerCase().includes("pending admin") ? "orbi-alert-success" : ""}`}>
+              <Icon name="alert" size={18} />
+              <span>{withdrawalMessage}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section
+                className="orbi-package-overview-grid"
+                style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+              >
+                <div>
+                  <span>EARNING WALLET</span>
+                  <strong>${formatUsdt(user.earningWallet)}</strong>
+
+                </div>
+                <div>
+                  <span>RANK WALLET</span>
+                  <strong>${formatUsdt(user.rankWallet)}</strong>
+
+                </div>
+                <div>
+                  <span>ROYALTY WALLET</span>
+                  <strong>${formatUsdt(user.royaltyWallet)}</strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">REQUEST WITHDRAWAL</span>
+                      <h2>Create a request</h2>
+
+                    </div>
+                    <Icon name="withdraw" size={22} />
+                  </div>
+
+                  <div className="orbi-withdraw-form">
+                    <div className="orbi-modal-field">
+                      <div className="orbi-modal-label-row">
+                        <label htmlFor="orbi-withdraw-wallet">WALLET</label>
+                      </div>
+                      <select
+                        id="orbi-withdraw-wallet"
+                        value={withdrawWallet}
+                        onChange={(event) => {
+                          setWithdrawWallet(Number(event.target.value));
+                          setWithdrawalMessage("");
+                        }}
+                        disabled={withdrawalBusy}
+                      >
+                        <option value={0}>Earning Wallet — ${formatUsdt(user.earningWallet)}</option>
+                        <option value={1}>Rank Wallet — ${formatUsdt(user.rankWallet)}</option>
+                        <option value={2}>Royalty Wallet — ${formatUsdt(user.royaltyWallet)}</option>
+                      </select>
+                    </div>
+
+                    <div className="orbi-modal-field">
+                      <div className="orbi-modal-label-row">
+                        <label htmlFor="orbi-withdraw-amount">AMOUNT</label>
+                        <button
+                          type="button"
+                          onClick={() => setWithdrawAmount(ethers.formatUnits(selectedAvailable, 18))}
+                          disabled={withdrawalBusy || selectedAvailable <= 0n}
+                        >
+                          MAX
+                        </button>
+                      </div>
+                      <div className="orbi-amount-input-wrap">
+                        <span>$</span>
+                        <input
+                          id="orbi-withdraw-amount"
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          placeholder="0.00"
+                          value={withdrawAmount}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (/^\d*(?:\.\d{0,18})?$/.test(value)) {
+                              setWithdrawAmount(value);
+                              setWithdrawalMessage("");
+                            }
+                          }}
+                          disabled={withdrawalBusy}
+                        />
+                        <span>USDT</span>
+                      </div>
+
+                    </div>
+
+                    <div className="orbi-withdraw-preview">
+                      <div><span>WITHDRAWAL FEE</span><strong>${formatUsdt(withdrawalFeePreview)}</strong></div>
+                      <div><span>ESTIMATED NET</span><strong>${formatUsdt(withdrawalNetPreview)}</strong></div>
+                    </div>
+
+                    <div className="orbi-withdraw-rules">
+                      <div><span>MINIMUM</span><b>${formatUsdt(withdrawalMinimum)}</b></div>
+                      <div><span>FEE</span><b>{(Number(withdrawalFeeBps) / 100).toFixed(2)}%</b></div>
+                      <div><span>REQUESTS</span><b>1 pending max</b></div>
+                    </div>
+
+                    <button
+                      className="orbi-modal-submit"
+                      onClick={requestWithdrawal}
+                      disabled={
+                        withdrawalBusy ||
+                        !withdrawAmount ||
+                        !withdrawalEnabled ||
+                        withdrawalLoading ||
+                        withdrawalHistory.some((row) => row.status === "PENDING")
+                      }
+                    >
+                      {withdrawalBusy ? "Submitting Request..." : "Request Withdrawal"}
+                    </button>
+
+                    {withdrawalTxHash && (
+                      <a
+                        className="orbi-modal-tx"
+                        href={`${BLOCK_EXPLORER}/tx/${withdrawalTxHash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View transaction on BscScan <Icon name="external" size={13} />
+                      </a>
+                    )}
+
+
+                  </div>
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">WITHDRAWAL STATUS</span>
+                      <h2>Request lifecycle</h2>
+
+                    </div>
+                    <Icon name="activity" size={22} />
+                  </div>
+
+                  <div className="orbi-withdraw-lifecycle">
+                    <div><span>1</span><div><b>REQUESTED</b></div></div>
+                    <div><span>2</span><div><b>ADMIN REVIEW</b></div></div>
+                    <div><span>3</span><div><b>APPROVED / REJECTED</b></div></div>
+                  </div>
+
+                  {withdrawalHistory.some((row) => row.status === "PENDING") && (
+                    <div className="orbi-withdraw-pending">
+                      <Icon name="activity" size={17} />
+                      <div>
+                        <b>Withdrawal request pending</b>
+                        <span>Wait for the current request to be approved or rejected before creating another.</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">WITHDRAWAL HISTORY</span>
+                    <h2>Recent requests</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>REQUESTS</span>
+                    <strong>{withdrawalHistory.length}</strong>
+                  </div>
+                </div>
+
+                {withdrawalLoading && withdrawalHistory.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="refresh" size={24} /><span>Loading withdrawal history...</span></div>
+                ) : withdrawalHistory.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="withdraw" size={24} /><span>No withdrawal requests found.</span></div>
+                ) : (
+                  <div className="orbi-withdraw-history-wrap">
+                    <table className="orbi-withdraw-table">
+                      <thead>
+                        <tr><th>REQUEST</th><th>WALLET</th><th>AMOUNT</th><th>FEE</th><th>NET</th><th>STATUS</th><th>BLOCK</th></tr>
+                      </thead>
+                      <tbody>
+                        {withdrawalHistory.map((row) => (
+                          <tr key={row.requestId.toString()}>
+                            <td>#{row.requestId.toString()}</td>
+                            <td>{row.walletType === 0 ? "EARNING" : row.walletType === 1 ? "RANK" : "ROYALTY"}</td>
+                            <td>${formatUsdt(row.amount)}</td>
+                            <td>${formatUsdt(row.fee)}</td>
+                            <td>${formatUsdt(row.netAmount)}</td>
+                            <td>
+                              <span className={`orbi-withdraw-status ${row.status.toLowerCase()}`}>
+                                {row.status}
+                              </span>
+                            </td>
+                            <td>#{row.blockNumber}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Emergency Exit") {
+      const emergencyStatus = emergencyLoading
+        ? "CHECKING"
+        : !emergencyEnabled
+          ? "DISABLED"
+          : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+            ? "COMPLETED"
+            : emergencyEligiblePackages.length > 0
+              ? "ELIGIBLE"
+              : "LOCKED";
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow orbi-emergency-eyebrow">
+                <span className="orbi-emergency-dot" />
+                EMERGENCY CAPITAL EXIT
+              </div>
+              <h1>Emergency Exit<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadEmergencyConfig}
+              disabled={emergencyLoading || emergencyBusy || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {emergencyLoading ? "Checking..." : "Refresh"}
+            </button>
+          </section>
+
+          {emergencyMessage && (
+            <div
+              className={`orbi-alert ${
+                emergencyMessage.toLowerCase().includes("successfully")
+                  ? "orbi-alert-success"
+                  : ""
+              }`}
+            >
+              <Icon name="alert" size={18} />
+              <span>{emergencyMessage}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art orbi-emergency-art">
+                <Icon name="alert" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-emergency-overview">
+                <div>
+                  <span>ACTIVE PACKAGES</span>
+                  <strong>{activePackages.length}</strong>
+
+                </div>
+                <div>
+                  <span>ELIGIBLE PACKAGES</span>
+                  <strong>{emergencyEligiblePackages.length}</strong>
+
+                </div>
+                <div>
+                  <span>ESTIMATED RETURN</span>
+                  <strong>${formatUsdt(emergencyReturn)}</strong>
+
+                </div>
+                <div>
+                  <span>EXIT STATUS</span>
+                  <strong
+                    className={
+                      emergencyStatus === "ELIGIBLE"
+                        ? "orbi-emergency-status-value eligible"
+                        : "orbi-emergency-status-value"
+                    }
+                  >
+                    {emergencyStatus}
+                  </strong>
+
+                </div>
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card orbi-emergency-action-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">PERMANENT ACTION</span>
+                      <h2>Emergency Capital Withdrawal</h2>
+
+                    </div>
+                    <Icon name="alert" size={22} />
+                  </div>
+
+                  <div className="orbi-emergency-warning">
+                    <Icon name="alert" size={18} />
+                    <div>
+                      <strong>This action cannot be reversed.</strong>
+                      <span>
+                        All active packages are permanently closed and your
+                        account moves to EMERGENCY EXIT status.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="orbi-emergency-rules">
+                    <div>
+                      <span>01</span>
+                      <div>
+                        <b>All active packages close</b>
+
+                      </div>
+                    </div>
+                    <div>
+                      <span>02</span>
+                      <div>
+                        <b>70% capital rule applies</b>
+
+                      </div>
+                    </div>
+                    <div>
+                      <span>03</span>
+                      <div>
+                        <b>Return is calculated on-chain</b>
+
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    className="orbi-emergency-submit"
+                    onClick={() => setEmergencyConfirmOpen(true)}
+                    disabled={
+                      emergencyBusy ||
+                      emergencyLoading ||
+                      !emergencyEnabled ||
+                      user.status === BigInt(USER_STATUS.EMERGENCY_EXIT) ||
+                      emergencyEligiblePackages.length === 0
+                    }
+                  >
+                    <Icon name="alert" size={17} />
+                    {emergencyBusy
+                      ? "Processing Emergency Exit..."
+                      : user.status === BigInt(USER_STATUS.EMERGENCY_EXIT)
+                        ? "Emergency Exit Completed"
+                        : !emergencyEnabled
+                          ? "Emergency Exit Disabled"
+                          : emergencyEligiblePackages.length === 0
+                            ? "No Eligible Packages"
+                            : "Continue to Emergency Exit"}
+                  </button>
+
+                  {emergencyTxHash && (
+                    <a
+                      className="orbi-modal-tx"
+                      href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View Emergency Exit transaction on BscScan
+                      <Icon name="external" size={13} />
+                    </a>
+                  )}
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">EXIT PROCESS</span>
+                      <h2>What happens next?</h2>
+
+                    </div>
+                    <Icon name="activity" size={22} />
+                  </div>
+
+                  <div className="orbi-withdraw-lifecycle orbi-emergency-lifecycle">
+                    <div>
+                      <span>1</span>
+                      <div>
+                        <b>REVIEW</b>
+
+                      </div>
+                    </div>
+                    <div>
+                      <span>2</span>
+                      <div>
+                        <b>CONFIRM</b>
+
+                      </div>
+                    </div>
+                    <div>
+                      <span>3</span>
+                      <div>
+                        <b>ON-CHAIN EXECUTION</b>
+
+                      </div>
+                    </div>
+                    <div>
+                      <span>4</span>
+                      <div>
+                        <b>EMERGENCY EXIT</b>
+
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PACKAGE ELIGIBILITY</span>
+                    <h2>Emergency return breakdown</h2>
+
+                  </div>
+                  <div className="orbi-package-summary">
+                    <span>ESTIMATED TOTAL</span>
+                    <strong>${formatUsdt(emergencyReturn)}</strong>
+                  </div>
+                </div>
+
+                {activePackages.length === 0 ? (
+                  <div className="orbi-no-data">
+                    <Icon name="package" size={24} />
+                    <span>No active packages.</span>
+
+                  </div>
+                ) : (
+                  <div className="orbi-emergency-package-list">
+                    {activePackages.map((item) => {
+                      const threshold = (item.amount * 70n) / 100n;
+                      const eligible = item.totalPaid < threshold;
+                      const returnAmount = eligible ? threshold - item.totalPaid : 0n;
+
+                      return (
+                        <div
+                          className={`orbi-emergency-package ${
+                            eligible ? "eligible" : "locked"
+                          }`}
+                          key={item.packageId.toString()}
+                        >
+                          <div>
+                            <span>PACKAGE</span>
+                            <b>#{item.packageId.toString()}</b>
+                          </div>
+                          <div>
+                            <span>STAKED</span>
+                            <b>${formatUsdt(item.amount)}</b>
+                          </div>
+                          <div>
+                            <span>TOTAL PAID</span>
+                            <b>${formatUsdt(item.totalPaid)}</b>
+                          </div>
+                          <div>
+                            <span>70% THRESHOLD</span>
+                            <b>${formatUsdt(threshold)}</b>
+                          </div>
+                          <div>
+                            <span>EST. RETURN</span>
+                            <b>${formatUsdt(returnAmount)}</b>
+                          </div>
+                          <span
+                            className={`orbi-emergency-package-badge ${
+                              eligible ? "eligible" : "locked"
+                            }`}
+                          >
+                            {eligible ? "ELIGIBLE" : "NO RETURN"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Settings") {
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                ACCOUNT SETTINGS
+              </div>
+              <h1>Settings<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={loadSettings}
+              disabled={settingsLoading || !wallet}
+            >
+              <Icon name="refresh" size={17} />
+              {settingsLoading ? "Checking..." : "Refresh"}
+            </button>
+          </section>
+
+          {settingsError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{settingsError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="settings" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-stat-grid orbi-settings-overview">
+                <StatCard
+                  icon="wallet"
+                  label="CONNECTED WALLET"
+                  value={shortAddress(wallet)}
+                />
+                <StatCard
+                  icon="activity"
+                  label="ACCOUNT STATUS"
+                  value={statusLabel(user.status)}
+                />
+                <StatCard
+                  icon="network"
+                  label="NETWORK"
+                  value="BSC TESTNET"
+                />
+              </section>
+
+
+
+              <section className="orbi-card orbi-settings-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">PROTOCOL FEATURES</span>
+                    <h2>Smart-contract feature status</h2>
+
+                  </div>
+                  <Icon name="settings" size={22} />
+                </div>
+
+                {settingsLoading ? (
+                  <div className="orbi-settings-loading">
+                    <Icon name="refresh" size={18} />
+                    Reading live contract settings...
+                  </div>
+                ) : (
+                  <div className="orbi-settings-feature-grid">
+                    {[
+                      ["Registration", settingsFeatures.registrationEnabled],
+                      ["Staking", settingsFeatures.stakingEnabled],
+                      ["Withdrawals", settingsFeatures.withdrawalEnabled],
+                      ["Emergency Exit", settingsFeatures.capitalWithdrawalEnabled],
+                    ].map(([label, enabled]) => (
+                      <div className="orbi-settings-feature" key={String(label)}>
+                        <span className={`orbi-settings-feature-dot ${enabled ? "enabled" : "disabled"}`} />
+                        <div>
+                          <strong>{String(label)}</strong>
+
+                        </div>
+                        <b className={enabled ? "enabled" : "disabled"}>{enabled ? "ON" : "OFF"}</b>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card orbi-settings-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">BALANCES</span>
+                      <h2>Wallet balances</h2>
+
+                    </div>
+                    <Icon name="money" size={22} />
+                  </div>
+                  <div className="orbi-balance-grid">
+                    <div><span>MOCUSDT</span><strong>${formatUsdt(usdtBalance)}</strong></div>
+                    <div><span>BNB</span><strong>{Number(ethers.formatEther(nativeBalance)).toFixed(4)} BNB</strong></div>
+                  </div>
+                </div>
+
+                <div className="orbi-card orbi-settings-card orbi-settings-session-card">
+                  <div className="orbi-card-head">
+                    <div>
+                      <span className="orbi-section-kicker">WALLET SESSION</span>
+                      <h2>Connection controls</h2>
+
+                    </div>
+                    <Icon name="wallet" size={22} />
+                  </div>
+                  <button className="orbi-settings-disconnect" onClick={disconnectWallet}>
+                    <Icon name="close" size={16} />
+                    Disconnect Wallet
+                  </button>
+
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav === "Referral") {
+      const activeDirects = teamMembers.filter(
+        (member) => member.status === BigInt(USER_STATUS.ACTIVE)
+      ).length;
+      const inactiveDirects = Math.max(0, teamMembers.length - activeDirects);
+      const directBusiness = teamMembers.reduce(
+        (sum, member) => sum + (referralLegBusiness[member.id.toString()] ?? 0n),
+        0n
+      );
+
+      return (
+        <>
+          <section className="orbi-welcome">
+            <div>
+              <div className="orbi-eyebrow">
+                <span className="orbi-live-dot" />
+                NETWORK GROWTH
+              </div>
+              <h1>Referral Center<span>.</span></h1>
+
+            </div>
+            <button
+              className="orbi-refresh-btn"
+              onClick={() => wallet && dashboard.user.id > 0n && loadMyTeam(dashboard.user.id, wallet)}
+              disabled={teamLoading || !wallet || dashboard.user.id === 0n}
+            >
+              <Icon name="refresh" size={17} />
+              {teamLoading ? "Loading..." : "Refresh"}
+            </button>
+          </section>
+
+          {teamError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{teamError}</span>
+            </div>
+          )}
+
+          {referralBusinessError && (
+            <div className="orbi-alert">
+              <Icon name="alert" size={18} />
+              <span>{referralBusinessError}</span>
+            </div>
+          )}
+
+          {!wallet ? (
+            <section className="orbi-connect-panel">
+              <div className="orbi-connect-art">
+                <Icon name="wallet" size={34} />
+              </div>
+              <div className="orbi-connect-copy">
+                <div className="orbi-section-kicker">WALLET REQUIRED</div>
+                <h2>Connect your wallet</h2>
+
+              </div>
+              <button className="orbi-primary-btn" onClick={connectWallet}>
+                <Icon name="wallet" size={18} />
+                Connect Wallet
+              </button>
+            </section>
+          ) : (
+            <>
+              <section className="orbi-card orbi-referral-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">YOUR INVITE LINK</span>
+                    <h2>Share your referral link</h2>
+
+                  </div>
+                  <Icon name="link" size={22} />
+                </div>
+                <div className="orbi-referral-row">
+                  <div className="orbi-referral-input">
+                    <span>{referralLink || "Generating referral link..."}</span>
+                  </div>
+                  <button className="orbi-copy-btn" onClick={copyReferral} disabled={!referralLink}>
+                    <Icon name="copy" size={17} />
+                    {copied ? "Copied" : "Copy Link"}
+                  </button>
+                </div>
+              </section>
+
+              <section className="orbi-package-overview-grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                <div><span>TOTAL DIRECTS</span><strong>{formatInteger(user.directCount)}</strong></div>
+                <div><span>ACTIVE DIRECTS</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
+                <div><span>DIRECT BUSINESS</span><strong>${referralBusinessLoading ? "…" : formatUsdt(directBusiness)}</strong></div>
+                <div><span>SPONSOR ID</span><strong>{user.sponsorId === 0n ? "—" : `#${user.sponsorId.toString()}`}</strong></div>
+              </section>
+
+              <section className="orbi-card orbi-package-section">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">DIRECT NETWORK</span>
+                    <h2>Your direct referrals</h2>
+
+                  </div>
+                  <div className="orbi-package-summary"><span>{teamMembers.length} loaded</span><strong>{activeDirects} active</strong></div>
+                </div>
+
+                {teamLoading && teamMembers.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="refresh" size={24} /><span>Loading direct referrals from blockchain...</span></div>
+                ) : teamMembers.length === 0 ? (
+                  <div className="orbi-no-data"><Icon name="team" size={24} /><span>No direct referrals yet.</span></div>
+                ) : (
+                  <div className="orbi-withdraw-history-wrap">
+                    <table className="orbi-withdraw-table">
+                      <thead><tr><th>USER ID</th><th>WALLET</th><th>STATUS</th><th>DIRECTS</th><th>ACTIVE DIRECTS</th><th>DIRECT BUSINESS</th><th>RANK</th></tr></thead>
+                      <tbody>
+                        {teamMembers.map((member) => {
+                          const memberActive = member.status === BigInt(USER_STATUS.ACTIVE);
+                          const memberBusiness = referralLegBusiness[member.id.toString()];
+                          return (
+                            <tr key={member.id.toString()}>
+                              <td>#{member.id.toString()}</td>
+                              <td>{shortAddress(member.wallet)}</td>
+                              <td><span className={`orbi-withdraw-status ${memberActive ? "approved" : "rejected"}`}>{statusLabel(member.status)}</span></td>
+                              <td>{formatInteger(member.directCount)}</td>
+                              <td>{formatInteger(member.activeDirectCount)}</td>
+                              <td>{referralBusinessLoading && memberBusiness === undefined ? "Loading..." : `$${formatUsdt(memberBusiness ?? 0n)}`}</td>
+                              <td>RANK {member.rank.toString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section className="orbi-two-column">
+                <div className="orbi-card">
+                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">NETWORK SNAPSHOT</span><h2>Direct activity</h2></div><Icon name="team" size={22} /></div>
+                  <div className="orbi-network-grid">
+                    <div><span>REGISTERED</span><strong>{formatInteger(user.directCount)}</strong></div>
+                    <div><span>ACTIVE</span><strong>{formatInteger(user.activeDirectCount)}</strong></div>
+                    <div><span>INACTIVE</span><strong>{inactiveDirects}</strong></div>
+                    <div><span>TEAM BUSINESS</span><strong>${formatUsdt(user.lifetimeBusiness)}</strong></div>
+                  </div>
+                </div>
+
+                <div className="orbi-card">
+                  <div className="orbi-card-head"><div><span className="orbi-section-kicker">HOW IT WORKS</span><h2>Build your network</h2></div><Icon name="link" size={22} /></div>
+                  <div className="orbi-withdraw-lifecycle">
+                    <div><span>1</span><div><b>SHARE</b></div></div>
+                    <div><span>2</span><div><b>REGISTER</b></div></div>
+                    <div><span>3</span><div><b>ACTIVATE</b></div></div>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      );
+    }
+
+    if (activeNav !== "Dashboard") {
+      return (
+        <section className="orbi-empty-section">
+          <div className="orbi-empty-icon">
+            <Icon
+              name={
+                navItems.find((item) => item.label === activeNav)?.icon ??
+                utilityItems.find((item) => item.label === activeNav)?.icon ??
+                "dashboard"
+              }
+              size={25}
+            />
+          </div>
+          <h2>{activeNav}</h2>
+          <p>
+            This module is connected to the same on-chain dashboard foundation.
+            We will wire its dedicated contract reads and transactions in the
+            next implementation step.
+          </p>
+        </section>
+      );
+    }
+
+
+    return (
+      <>
+        <section className="orbi-welcome">
+          <div>
+            <div className="orbi-eyebrow">
+              <span className="orbi-live-dot" />
+              DECENTRALIZED DASHBOARD
+            </div>
+            <h1>
+              Welcome To ORBI WORLD<span>.</span>
+            </h1>
+            <p>
+              Your ORBI WORLD ecosystem overview, powered directly by the
+              blockchain.
+            </p>
+          </div>
+
+          <button className="orbi-refresh-btn" onClick={refresh} disabled={loading}>
+            <Icon name="refresh" size={17} />
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </section>
+
+        {networkError && (
+          <div className="orbi-alert orbi-alert-warning">
+            <Icon name="alert" size={18} />
+            <span>{networkError}</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="orbi-alert">
+            <Icon name="alert" size={18} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {!wallet && (
+          <section className="orbi-connect-panel">
+            <div className="orbi-connect-art">
+              <Icon name="wallet" size={34} />
+            </div>
+            <div className="orbi-connect-copy">
+              <div className="orbi-section-kicker">WALLET REQUIRED</div>
+              <h2>Connect your wallet</h2>
+              <p>
+                Connect the wallet that owns your ORBI WORLD account to load
+                your real on-chain dashboard data.
+              </p>
+            </div>
+            <button className="orbi-primary-btn" onClick={connectWallet}>
+              <Icon name="wallet" size={18} />
+              Connect Wallet
+            </button>
+          </section>
+        )}
+
+        {wallet && (
+          <>
+            <section className="orbi-wallet-bar">
+              <div className="orbi-wallet-left">
+                <div className="orbi-wallet-status" />
+                <div>
+                  <span>CONNECTED WALLET</span>
+                  <strong>{shortAddress(wallet)}</strong>
+                </div>
+              </div>
+
+              <a
+                href={`${BLOCK_EXPLORER}/address/${wallet}`}
+                target="_blank"
+                rel="noreferrer"
+                className="orbi-explorer-link"
+              >
+                View on BscScan
+                <Icon name="external" size={15} />
+              </a>
+            </section>
+
+            <section className="orbi-stat-grid">
+              <StatCard
+                icon="package"
+                label="TOTAL STAKED"
+                value={`$${formatUsdt(totalStaked)}`}
+              />
+              <StatCard
+                icon="dashboard"
+                label="ACTIVE PACKAGES"
+                value={formatInteger(BigInt(activePackages.length))}
+              />
+              <StatCard
+                icon="money"
+                label="TOTAL EARNINGS"
+                value={`$${formatUsdt(totalEarnings)}`}
+              />
+              <StatCard
+                icon="team"
+                label="DIRECT REFERRALS"
+                value={formatInteger(user.directCount)}
+              />
+            </section>
+
+            <section className="orbi-two-column">
+              <div className="orbi-card orbi-wallet-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">WALLET OVERVIEW</span>
+                    <h2>On-chain balances</h2>
+                  </div>
+                  <Icon name="wallet" size={22} />
+                </div>
+
+                <div className="orbi-balance-grid">
+                  <div>
+                    <span>MOCUSDT BALANCE</span>
+                    <strong>${formatUsdt(usdtBalance)}</strong>
+                  </div>
+                  <div>
+                    <span>BNB BALANCE</span>
+                    <strong>{Number(ethers.formatEther(nativeBalance)).toFixed(4)} BNB</strong>
+                  </div>
+                  <div>
+                    <span>ACCOUNT STATUS</span>
+                    <strong className="orbi-status-text">
+                      {statusLabel(user.status)}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="orbi-card orbi-income-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">EARNINGS</span>
+                    <h2>Income breakdown</h2>
+                  </div>
+                  <Icon name="money" size={22} />
+                </div>
+
+                <div className="orbi-income-list">
+                  <IncomeRow label="ROI Income" value={user.totalROIIncome} />
+                  <IncomeRow
+                    label="Level Income"
+                    value={user.totalLevelIncome}
+                  />
+                  <IncomeRow
+                    label="Rank Income"
+                    value={user.totalRankIncome}
+                  />
+                  <IncomeRow
+                    label="Royalty Income"
+                    value={user.totalRoyaltyIncome}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="orbi-card orbi-package-section">
+              <div className="orbi-card-head">
+                <div>
+                  <span className="orbi-section-kicker">STAKING</span>
+                  <h2>My Packages</h2>
+                </div>
+                <div className="orbi-package-summary">
+                  <span>ON-CHAIN PAID</span>
+                  <strong>${formatUsdt(totalPackagePaid)}</strong>
+                </div>
+              </div>
+
+              {packages.length === 0 ? (
+                <div className="orbi-no-data">
+                  <Icon name="package" size={24} />
+                  <span>No packages found for this wallet.</span>
+                </div>
+              ) : (
+                <div className="orbi-package-grid">
+                  {packages.map((item) => {
+                    const threshold = (item.amount * 70n) / 100n;
+                    const progress =
+                      item.maxPayout > 0n
+                        ? Math.min(
+                            100,
+                            Number(
+                              (item.totalPaid * 10000n) / item.maxPayout
+                            ) / 100
+                          )
+                        : 0;
+
+                    const emergencyEligible =
+                      item.status === BigInt(PACKAGE_STATUS.ACTIVE) &&
+                      item.totalPaid < threshold;
+
+                    return (
+                      <article
+                        className={`orbi-package-item ${
+                          item.status === BigInt(PACKAGE_STATUS.ACTIVE)
+                            ? "is-active"
+                            : ""
+                        }`}
+                        key={item.packageId.toString()}
+                      >
+                        <div className="orbi-package-top">
+                          <div>
+                            <span>PACKAGE</span>
+                            <strong>#{item.packageId.toString()}</strong>
+                          </div>
+                          <span
+                            className={`orbi-package-status ${
+                              item.status === BigInt(PACKAGE_STATUS.ACTIVE)
+                                ? "active"
+                                : "closed"
+                            }`}
+                          >
+                            {packageStatusLabel(
+                              item.status,
+                              item.emergencyClosed
+                            )}
+                          </span>
+                        </div>
+
+                        <div className="orbi-package-amount">
+                          <span>STAKED AMOUNT</span>
+                          <strong>${formatUsdt(item.amount)}</strong>
+                        </div>
+
+                        <div className="orbi-progress-wrap">
+                          <div className="orbi-progress-label">
+                            <span>2X PAYOUT PROGRESS</span>
+                            <b>{progress.toFixed(1)}%</b>
+                          </div>
+                          <div className="orbi-progress">
+                            <span style={{ width: `${progress}%` }} />
+                          </div>
+                          <div className="orbi-progress-values">
+                            <span>${formatUsdt(item.totalPaid)} paid</span>
+                            <span>${formatUsdt(item.maxPayout)} max</span>
+                          </div>
+                        </div>
+
+                        <div className="orbi-package-stats">
+                          <div>
+                            <span>ROI PAID</span>
+                            <b>${formatUsdt(item.roiPaid)}</b>
+                          </div>
+                          <div>
+                            <span>LEVEL PAID</span>
+                            <b>${formatUsdt(item.levelPaid)}</b>
+                          </div>
+                          <div>
+                            <span>STARTED</span>
+                            <b>{formatDate(item.startTime)}</b>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`orbi-emergency-status ${
+                            emergencyEligible ? "eligible" : "locked"
+                          }`}
+                        >
+                          <div>
+                            <span>EMERGENCY EXIT</span>
+                            <strong>
+                              {emergencyEligible ? "ELIGIBLE" : "LOCKED"}
+                            </strong>
+                          </div>
+                          <small>
+                            70% threshold: ${formatUsdt(threshold)}
+                          </small>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section className="orbi-two-column">
+              <div className="orbi-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">NETWORK</span>
+                    <h2>Your network</h2>
+                  </div>
+                  <Icon name="team" size={22} />
+                </div>
+
+                <div className="orbi-network-grid">
+                  <div>
+                    <span>DIRECTS</span>
+                    <strong>{formatInteger(user.directCount)}</strong>
+                  </div>
+                  <div>
+                    <span>ACTIVE DIRECTS</span>
+                    <strong>{formatInteger(user.activeDirectCount)}</strong>
+                  </div>
+                  <div>
+                    <span>TEAM BUSINESS</span>
+                    <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
+                  </div>
+                  <div>
+                    <span>POWER LEG</span>
+                    <strong>${formatUsdt(user.powerLegBusiness)}</strong>
+                  </div>
+                  <div>
+                    <span>OTHER LEG BUSINESS</span>
+                    <strong>${formatUsdt(user.otherLegBusiness)}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="orbi-card orbi-rank-card">
+                <div className="orbi-card-head">
+                  <div>
+                    <span className="orbi-section-kicker">ACHIEVEMENT</span>
+                    <h2>Rank & Royalty</h2>
+                  </div>
+                  <Icon name="trophy" size={22} />
+                </div>
+
+                <div className="orbi-achievement-row">
+                  <div className="orbi-achievement">
+                    <span>CURRENT RANK</span>
+                    <strong>RANK {user.rank.toString()}</strong>
+                  </div>
+                  <div className="orbi-achievement">
+                    <span>ROYALTY LEVEL</span>
+                    <strong>{user.royalty.toString()}</strong>
+                  </div>
+                </div>
+
+                <div className="orbi-achievement-wallets">
+                  <div>
+                    <span>RANK WALLET</span>
+                    <b>${formatUsdt(user.rankWallet)}</b>
+                  </div>
+                  <div>
+                    <span>ROYALTY WALLET</span>
+                    <b>${formatUsdt(user.royaltyWallet)}</b>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="orbi-card orbi-referral-card">
+              <div className="orbi-card-head">
+                <div>
+                  <span className="orbi-section-kicker">NETWORK GROWTH</span>
+                  <h2>Your referral link</h2>
+                  <p>Share your wallet-linked referral URL.</p>
+                </div>
+                <Icon name="link" size={22} />
+              </div>
+
+              <div className="orbi-referral-row">
+                <div className="orbi-referral-input">
+                  <span>{referralLink || "Connect wallet to generate link"}</span>
+                </div>
+                <button
+                  className="orbi-copy-btn"
+                  onClick={copyReferral}
+                  disabled={!referralLink}
+                >
+                  <Icon name="copy" size={17} />
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            </section>
+
+            <section className="orbi-card orbi-activity-card">
+              <div className="orbi-card-head">
+                <div>
+                  <span className="orbi-section-kicker">ACCOUNT</span>
+                  <h2>Activity overview</h2>
+                </div>
+                <Icon name="activity" size={22} />
+              </div>
+
+              <div className="orbi-activity-grid">
+                <div>
+                  <span>LIFETIME BUSINESS</span>
+                  <strong>${formatUsdt(user.lifetimeBusiness)}</strong>
+                </div>
+                <div>
+                  <span>MONTHLY BUSINESS</span>
+                  <strong>${formatUsdt(user.monthlyBusiness)}</strong>
+                </div>
+                <div>
+                  <span>TODAY BUSINESS</span>
+                  <strong>${formatUsdt(user.todayBusiness)}</strong>
+                </div>
+                <div>
+                  <span>TOTAL WITHDRAWN</span>
+                  <strong>${formatUsdt(user.totalWithdrawn)}</strong>
+                </div>
+              </div>
+
+              <div className="orbi-activity-foot">
+                <span>
+                  {emergencyEligiblePackages.length} active package
+                  {emergencyEligiblePackages.length === 1 ? "" : "s"} currently
+                  below the 70% emergency-exit threshold.
+                </span>
+                <a
+                  href={`${BLOCK_EXPLORER}/address/${wallet}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open wallet on explorer
+                  <Icon name="external" size={14} />
+                </a>
+              </div>
+            </section>
+          </>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <main className="orbi-dashboard">
+      <style jsx global>{`
+        .orbi-dashboard {
+          --od-bg: #03050a;
+          --od-surface: #080d16;
+          --od-surface-2: #0d1522;
+          --od-border: rgba(63, 115, 176, 0.28);
+          --od-border-light: rgba(72, 145, 225, 0.42);
+          --od-primary: #168cff;
+          --od-primary-soft: #54b4ff;
+          --od-purple: #7357ff;
+          --od-orange: #ff9d32;
+          --od-gold: #ffd166;
+          --od-text: #f8fbff;
+          --od-muted: #91a5bd;
+          --od-muted-2: #637991;
+          --od-success: #22c55e;
+          --od-danger: #ef4444;
+          min-height: 100vh;
+          display: flex;
+          color: var(--od-text);
+          background:
+            radial-gradient(circle at 82% 4%, rgba(115, 87, 255, 0.13), transparent 27%),
+            radial-gradient(circle at 24% 12%, rgba(22, 140, 255, 0.11), transparent 30%),
+            radial-gradient(circle at 62% 88%, rgba(255, 157, 50, 0.045), transparent 24%),
+            var(--od-bg);
+          font-family: Arial, Helvetica, sans-serif;
+        }
+
+        .orbi-sidebar {
+          position: fixed;
+          inset: 0 auto 0 0;
+          z-index: 50;
+          width: 250px;
+          padding: 22px 14px 18px;
+          display: flex;
+          flex-direction: column;
+          background: linear-gradient(180deg, rgba(5, 9, 16, 0.98), rgba(3, 7, 13, 0.98));
+          border-right: 1px solid var(--od-border);
+          box-shadow: 14px 0 45px rgba(0, 0, 0, 0.18);
+          backdrop-filter: blur(20px);
+          -webkit-backdrop-filter: blur(20px);
+        }
+
+        .orbi-brand-logo-wrap {
+          width: 100%;
+          display: flex;
+          align-items: center;
+        }
+
+        .orbi-brand-logo {
+          display: block;
+          width: 128px;
+          max-width: 100%;
+          height: auto;
+          object-fit: contain;
+        }
+
+        .orbi-brand {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+          padding: 4px 10px 24px;
+          border-bottom: 1px solid rgba(38, 55, 80, 0.55);
+          margin-bottom: 15px;
+        }
+
+        .orbi-brand-mark {
+          width: 38px;
+          height: 38px;
+          display: grid;
+          place-items: center;
+          border-radius: 11px;
+          background: linear-gradient(135deg, var(--od-primary), var(--od-purple), var(--od-orange));
+          box-shadow: 0 0 26px rgba(22, 140, 255, 0.2);
+          font-size: 14px;
+          font-weight: 900;
+          color: #fff;
+        }
+
+        .orbi-brand-name {
+          font-size: 16px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+        }
+
+        .orbi-brand-sub {
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          letter-spacing: 0.15em;
+          font-weight: 700;
+        }
+
+        .orbi-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          overflow-y: auto;
+          padding-right: 2px;
+        }
+
+        .orbi-nav-button {
+          width: 100%;
+          min-height: 43px;
+          border: 1px solid transparent;
+          border-radius: 11px;
+          background: transparent;
+          color: var(--od-muted);
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 0 12px;
+          text-align: left;
+          transition: 180ms ease;
+        }
+
+        .orbi-nav-button:hover {
+          color: #fff;
+          background: linear-gradient(90deg, rgba(22, 140, 255, 0.08), rgba(115, 87, 255, 0.035));
+          border-color: rgba(22, 140, 255, 0.16);
+        }
+
+        .orbi-nav-button.active {
+          color: #fff;
+          background: linear-gradient(90deg, rgba(22, 140, 255, 0.17), rgba(115, 87, 255, 0.10));
+          border-color: rgba(22, 140, 255, 0.34);
+          box-shadow: inset 3px 0 0 var(--od-primary), 0 8px 24px rgba(22, 140, 255, 0.06);
+        }
+
+        .orbi-nav-button.danger {
+          color: #d38a8a;
+        }
+
+        .orbi-nav-button.danger.active,
+        .orbi-nav-button.danger:hover {
+          color: #fff;
+          border-color: rgba(239, 68, 68, 0.18);
+          background: rgba(239, 68, 68, 0.06);
+          box-shadow: inset 2px 0 0 var(--od-danger);
+        }
+
+        .orbi-nav-divider {
+          height: 1px;
+          background: rgba(38, 55, 80, 0.55);
+          margin: 12px 8px;
+        }
+
+        .orbi-sidebar-bottom {
+          margin-top: auto;
+          padding-top: 12px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          line-height: 1.5;
+          letter-spacing: 0.08em;
+        }
+
+        .orbi-mobile-top {
+          display: none;
+        }
+
+        .orbi-main {
+          width: calc(100% - 250px);
+          margin-left: 250px;
+          min-height: 100vh;
+          padding: 34px 38px 50px;
+        }
+
+        .orbi-main-inner {
+          width: min(100%, 1420px);
+          margin: 0 auto;
+        }
+
+        .orbi-welcome {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-end;
+          gap: 20px;
+          margin-bottom: 25px;
+        }
+
+        .orbi-eyebrow,
+        .orbi-section-kicker {
+          color: var(--od-muted-2);
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.17em;
+        }
+
+        .orbi-eyebrow {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin-bottom: 10px;
+        }
+
+        .orbi-live-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: var(--od-success);
+          box-shadow: 0 0 12px rgba(34, 197, 94, 0.7);
+        }
+
+        .orbi-welcome h1 {
+          margin: 0;
+          font-size: clamp(30px, 3vw, 44px);
+          line-height: 1;
+          letter-spacing: -0.04em;
+        }
+
+        .orbi-welcome h1 span {
+          color: var(--od-primary);
+        }
+
+        .orbi-welcome p {
+          margin: 10px 0 0;
+          max-width: 600px;
+          color: var(--od-muted);
+          font-size: 14px;
+          line-height: 1.6;
+        }
+
+        .orbi-refresh-btn,
+        .orbi-primary-btn,
+        .orbi-copy-btn {
+          border: 1px solid var(--od-border-light);
+          color: #fff;
+          background: rgba(14, 21, 34, 0.9);
+          border-radius: 11px;
+          min-height: 42px;
+          padding: 0 15px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          font-weight: 700;
+          transition: 180ms ease;
+        }
+
+        .orbi-refresh-btn:hover,
+        .orbi-copy-btn:hover {
+          border-color: rgba(22, 140, 255, 0.45);
+          background: rgba(22, 140, 255, 0.08);
+        }
+
+        .orbi-refresh-btn:disabled,
+        .orbi-copy-btn:disabled,
+        .orbi-primary-btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .orbi-primary-btn {
+          border-color: rgba(22, 140, 255, 0.5);
+          background: linear-gradient(135deg, #168cff 0%, #4d72ff 52%, #7357ff 100%);
+          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.18), 0 4px 18px rgba(115, 87, 255, 0.10);
+        }
+
+        .orbi-primary-btn:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 15px 36px rgba(22, 140, 255, 0.22);
+        }
+
+        .orbi-alert {
+          min-height: 48px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 18px;
+          padding: 0 15px;
+          border: 1px solid rgba(239, 68, 68, 0.25);
+          border-radius: 12px;
+          background: rgba(239, 68, 68, 0.055);
+          color: #fca5a5;
+          font-size: 13px;
+        }
+
+        .orbi-alert-warning {
+          border-color: rgba(255, 157, 50, 0.25);
+          background: rgba(255, 157, 50, 0.05);
+          color: #fdba74;
+        }
+
+        .orbi-connect-panel,
+        .orbi-wallet-bar,
+        .orbi-card {
+          border: 1px solid var(--od-border);
+          background: linear-gradient(145deg, rgba(10, 16, 27, 0.88), rgba(6, 11, 19, 0.82));
+          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.015);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+        }
+
+        .orbi-connect-panel {
+          min-height: 150px;
+          display: flex;
+          align-items: center;
+          gap: 20px;
+          padding: 24px;
+          border-radius: 18px;
+          margin-bottom: 22px;
+        }
+
+        .orbi-connect-art {
+          width: 64px;
+          height: 64px;
+          flex: 0 0 64px;
+          display: grid;
+          place-items: center;
+          border-radius: 17px;
+          color: #fff;
+          background: linear-gradient(135deg, rgba(22, 140, 255, 0.16), rgba(115, 87, 255, 0.13));
+          border: 1px solid rgba(22, 140, 255, 0.2);
+        }
+
+        .orbi-connect-copy {
+          flex: 1;
+        }
+
+        .orbi-connect-copy h2 {
+          margin: 5px 0 6px;
+          font-size: 20px;
+        }
+
+        .orbi-connect-copy p {
+          margin: 0;
+          color: var(--od-muted);
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        .orbi-wallet-bar {
+          min-height: 58px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 15px;
+          padding: 0 16px;
+          margin-bottom: 14px;
+          border-radius: 13px;
+        }
+
+        .orbi-wallet-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .orbi-wallet-status {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--od-success);
+          box-shadow: 0 0 13px rgba(34, 197, 94, 0.75);
+        }
+
+        .orbi-wallet-left span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+        }
+
+        .orbi-wallet-left strong {
+          display: block;
+          margin-top: 2px;
+          font-size: 13px;
+        }
+
+        .orbi-explorer-link,
+        .orbi-activity-foot a {
+          color: #9bcfff;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .orbi-stat-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 13px;
+          margin-bottom: 14px;
+        }
+
+        .orbi-stat {
+          min-height: 145px;
+          padding: 18px;
+          border: 1px solid var(--od-border);
+          border-radius: 15px;
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
+          position: relative;
+          overflow: hidden;
+        }
+
+        .orbi-stat::after {
+          content: "";
+          position: absolute;
+          width: 100px;
+          height: 100px;
+          right: -45px;
+          top: -45px;
+          border-radius: 50%;
+          background: rgba(22, 140, 255, 0.08);
+          filter: blur(10px);
+        }
+
+        .orbi-stat-icon {
+          width: 37px;
+          height: 37px;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+          color: #9bcfff;
+          background: linear-gradient(135deg, rgba(22, 140, 255, 0.12), rgba(115, 87, 255, 0.07));
+          border: 1px solid rgba(22, 140, 255, 0.20);
+          margin-bottom: 18px;
+        }
+
+        .orbi-stat-label {
+          color: var(--od-muted-2);
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.15em;
+        }
+
+        .orbi-stat-value {
+          margin-top: 6px;
+          font-size: 25px;
+          font-weight: 800;
+          letter-spacing: -0.03em;
+        }
+
+        .orbi-stat-meta {
+          margin-top: 5px;
+          color: var(--od-muted);
+          font-size: 10px;
+        }
+
+        .orbi-two-column {
+          display: grid;
+          grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr);
+          gap: 14px;
+          margin-bottom: 14px;
+        }
+
+        .orbi-card {
+          border-radius: 16px;
+          padding: 20px;
+        }
+
+        .orbi-card-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 15px;
+          margin-bottom: 18px;
+        }
+
+        .orbi-card-head > svg,
+        .orbi-card-head > div:last-child > svg {
+          color: #6fbaff;
+        }
+
+        .orbi-card h2 {
+          margin: 5px 0 0;
+          font-size: 18px;
+          letter-spacing: -0.02em;
+        }
+
+        .orbi-card-head p {
+          margin: 6px 0 0;
+          color: var(--od-muted);
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .orbi-balance-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+        }
+
+        .orbi-balance-grid > div,
+        .orbi-network-grid > div,
+        .orbi-activity-grid > div {
+          min-height: 78px;
+          padding: 13px;
+          border: 1px solid rgba(38, 55, 80, 0.65);
+          border-radius: 12px;
+          background: rgba(14, 21, 34, 0.48);
+        }
+
+        .orbi-balance-grid span,
+        .orbi-network-grid span,
+        .orbi-activity-grid span,
+        .orbi-package-stats span,
+        .orbi-achievement span,
+        .orbi-achievement-wallets span,
+        .orbi-package-amount span,
+        .orbi-package-top span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-balance-grid strong,
+        .orbi-network-grid strong,
+        .orbi-activity-grid strong {
+          display: block;
+          margin-top: 7px;
+          font-size: 15px;
+        }
+
+        .orbi-status-text {
+          color: var(--od-success) !important;
+          font-size: 12px !important;
+        }
+
+        .orbi-income-list {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .orbi-income-row {
+          min-height: 45px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-bottom: 1px solid rgba(38, 55, 80, 0.55);
+        }
+
+        .orbi-income-row:last-child {
+          border-bottom: 0;
+        }
+
+        .orbi-income-row span {
+          color: var(--od-muted);
+          font-size: 12px;
+        }
+
+        .orbi-income-row strong {
+          font-size: 13px;
+        }
+
+        .orbi-package-section {
+          margin-bottom: 14px;
+        }
+
+        .orbi-package-summary {
+          text-align: right;
+        }
+
+        .orbi-package-summary span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-package-summary strong {
+          display: block;
+          margin-top: 5px;
+          font-size: 18px;
+        }
+
+        .orbi-package-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 12px;
+        }
+
+        .orbi-package-item {
+          padding: 17px;
+          border: 1px solid rgba(38, 55, 80, 0.75);
+          border-radius: 14px;
+          background: rgba(6, 10, 17, 0.55);
+        }
+
+        .orbi-package-item.is-active {
+          border-color: rgba(22, 140, 255, 0.25);
+          box-shadow: inset 0 1px 0 rgba(22, 140, 255, 0.08);
+        }
+
+        .orbi-package-top {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .orbi-package-top strong {
+          display: block;
+          margin-top: 5px;
+          font-size: 15px;
+        }
+
+        .orbi-package-status {
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 7px;
+          font-weight: 900;
+          letter-spacing: 0.1em;
+          white-space: nowrap;
+        }
+
+        .orbi-package-status.active {
+          color: #86efac;
+          background: rgba(34, 197, 94, 0.08);
+          border: 1px solid rgba(34, 197, 94, 0.16);
+        }
+
+        .orbi-package-status.closed {
+          color: #aebbd0;
+          background: rgba(139, 155, 176, 0.08);
+          border: 1px solid rgba(139, 155, 176, 0.13);
+        }
+
+        .orbi-package-amount {
+          margin-top: 21px;
+        }
+
+        .orbi-package-amount strong {
+          display: block;
+          margin-top: 4px;
+          font-size: 26px;
+          letter-spacing: -0.04em;
+        }
+
+        .orbi-progress-wrap {
+          margin-top: 19px;
+        }
+
+        .orbi-progress-label,
+        .orbi-progress-values {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .orbi-progress-label {
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.11em;
+        }
+
+        .orbi-progress-label b {
+          color: #b8d9ff;
+          font-size: 9px;
+          letter-spacing: 0;
+        }
+
+        .orbi-progress {
+          height: 6px;
+          margin-top: 8px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #182333;
+        }
+
+        .orbi-progress span {
+          display: block;
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, var(--od-primary), var(--od-purple), var(--od-orange));
+          box-shadow: 0 0 15px rgba(22, 140, 255, 0.35);
+        }
+
+        .orbi-progress-values {
+          margin-top: 6px;
+          color: var(--od-muted-2);
+          font-size: 8px;
+        }
+
+        .orbi-package-stats {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          margin-top: 18px;
+        }
+
+        .orbi-package-stats > div {
+          padding: 9px;
+          border-radius: 9px;
+          background: rgba(14, 21, 34, 0.7);
+        }
+
+        .orbi-package-stats b {
+          display: block;
+          margin-top: 5px;
+          font-size: 10px;
+        }
+
+        .orbi-emergency-status {
+          margin-top: 12px;
+          padding: 10px 11px;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .orbi-emergency-status.eligible {
+          color: #bbf7d0;
+          border: 1px solid rgba(34, 197, 94, 0.18);
+          background: rgba(34, 197, 94, 0.05);
+        }
+
+        .orbi-emergency-status.locked {
+          color: #cbd5e1;
+          border: 1px solid rgba(139, 155, 176, 0.12);
+          background: rgba(139, 155, 176, 0.045);
+        }
+
+        .orbi-emergency-status span {
+          display: block;
+          font-size: 7px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          opacity: 0.7;
+        }
+
+        .orbi-emergency-status strong {
+          display: block;
+          margin-top: 3px;
+          font-size: 10px;
+        }
+
+        .orbi-emergency-status small {
+          color: var(--od-muted);
+          font-size: 8px;
+          text-align: right;
+        }
+
+        .orbi-network-grid,
+        .orbi-activity-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+        }
+
+        .orbi-achievement-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .orbi-achievement {
+          padding: 14px;
+          border-radius: 12px;
+          border: 1px solid rgba(38, 55, 80, 0.65);
+          background: linear-gradient(135deg, rgba(22, 140, 255, 0.07), rgba(115, 87, 255, 0.04));
+        }
+
+        .orbi-achievement strong {
+          display: block;
+          margin-top: 7px;
+          font-size: 15px;
+        }
+
+        .orbi-achievement-wallets {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 10px;
+        }
+
+        .orbi-achievement-wallets > div {
+          padding: 11px 13px;
+          border-top: 1px solid rgba(38, 55, 80, 0.5);
+        }
+
+        .orbi-achievement-wallets b {
+          display: block;
+          margin-top: 5px;
+          font-size: 12px;
+        }
+
+        .orbi-referral-card,
+        .orbi-activity-card {
+          margin-bottom: 14px;
+        }
+
+        .orbi-referral-row {
+          display: flex;
+          gap: 10px;
+        }
+
+        .orbi-referral-input {
+          flex: 1;
+          min-width: 0;
+          height: 45px;
+          display: flex;
+          align-items: center;
+          padding: 0 13px;
+          border: 1px solid rgba(38, 55, 80, 0.75);
+          border-radius: 10px;
+          background: rgba(3, 5, 8, 0.55);
+          overflow: hidden;
+        }
+
+        .orbi-referral-input span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--od-muted);
+          font-size: 11px;
+        }
+
+        .orbi-activity-foot {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 15px;
+          margin-top: 14px;
+          padding-top: 13px;
+          border-top: 1px solid rgba(38, 55, 80, 0.55);
+          color: var(--od-muted-2);
+          font-size: 9px;
+        }
+
+        .orbi-package-overview-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .orbi-package-overview-grid > div {
+          min-height: 108px;
+          padding: 15px;
+          border: 1px solid var(--od-border);
+          border-radius: 14px;
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
+        }
+
+        .orbi-package-overview-grid span,
+        .orbi-package-detail-row span,
+        .orbi-package-meta-grid span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-package-overview-grid strong {
+          display: block;
+          margin-top: 9px;
+          font-size: 22px;
+          letter-spacing: -0.03em;
+        }
+
+        .orbi-package-overview-grid small {
+          display: block;
+          margin-top: 5px;
+          color: var(--od-muted);
+          font-size: 9px;
+        }
+
+        .orbi-package-grid-page {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .orbi-package-page-item {
+          min-width: 0;
+        }
+
+        .orbi-package-detail-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .orbi-package-detail-row > div,
+        .orbi-package-meta-grid > div {
+          padding: 9px 10px;
+          border-radius: 9px;
+          background: rgba(14, 21, 34, 0.7);
+        }
+
+        .orbi-package-detail-row b,
+        .orbi-package-meta-grid b {
+          display: block;
+          margin-top: 5px;
+          color: #d9e6f7;
+          font-size: 10px;
+        }
+
+        .orbi-package-meta-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .orbi-packages-page .orbi-no-data {
+          min-height: 230px;
+        }
+
+        .orbi-no-data,
+        .orbi-withdraw-form {
+          display: grid;
+          gap: 16px;
+        }
+
+        .orbi-withdraw-form select {
+          width: 100%;
+          min-height: 46px;
+          padding: 0 13px;
+          border: 1px solid var(--od-border-light);
+          border-radius: 10px;
+          color: var(--od-text);
+          background: #060a11;
+          outline: none;
+        }
+
+        .orbi-withdraw-preview {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .orbi-withdraw-preview > div,
+        .orbi-withdraw-rules > div {
+          padding: 12px;
+          border: 1px solid rgba(38, 55, 80, 0.7);
+          border-radius: 10px;
+          background: rgba(8, 13, 21, 0.72);
+        }
+
+        .orbi-withdraw-preview span,
+        .orbi-withdraw-rules span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: .1em;
+        }
+
+        .orbi-withdraw-preview strong,
+        .orbi-withdraw-rules b {
+          display: block;
+          margin-top: 6px;
+          font-size: 14px;
+        }
+
+        .orbi-withdraw-rules {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+        }
+
+        .orbi-withdraw-lifecycle {
+          display: grid;
+          gap: 12px;
+        }
+
+        .orbi-withdraw-lifecycle > div {
+          display: flex;
+          align-items: flex-start;
+          gap: 11px;
+          padding: 12px;
+          border: 1px solid rgba(38, 55, 80, .65);
+          border-radius: 11px;
+          background: rgba(8, 13, 21, .55);
+        }
+
+        .orbi-withdraw-lifecycle > div > span {
+          width: 27px;
+          height: 27px;
+          flex: 0 0 27px;
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          color: #9bcfff;
+          background: rgba(22, 140, 255, .1);
+          border: 1px solid rgba(22, 140, 255, .18);
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .orbi-withdraw-lifecycle b {
+          display: block;
+          color: #eef4fb;
+          font-size: 11px;
+          letter-spacing: .06em;
+        }
+
+        .orbi-withdraw-lifecycle small {
+          display: block;
+          margin-top: 4px;
+          color: var(--od-muted);
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .orbi-withdraw-pending {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-top: 16px;
+          padding: 12px;
+          border: 1px solid rgba(245, 196, 81, .2);
+          border-radius: 11px;
+          color: #ffd76d;
+          background: rgba(245, 196, 81, .05);
+        }
+
+        .orbi-withdraw-pending b,
+        .orbi-withdraw-pending span {
+          display: block;
+        }
+
+        .orbi-withdraw-pending b { font-size: 11px; }
+        .orbi-withdraw-pending span { margin-top: 3px; color: var(--od-muted); font-size: 10px; line-height: 1.45; }
+
+        .orbi-withdraw-history-wrap {
+          width: 100%;
+          overflow-x: auto;
+          border: 1px solid rgba(38, 55, 80, .65);
+          border-radius: 12px;
+        }
+
+        .orbi-withdraw-table {
+          width: 100%;
+          min-width: 820px;
+          border-collapse: collapse;
+        }
+
+        .orbi-withdraw-table th {
+          padding: 12px 13px;
+          text-align: left;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          background: rgba(14, 21, 34, .68);
+          border-bottom: 1px solid rgba(38, 55, 80, .65);
+          white-space: nowrap;
+        }
+
+        .orbi-withdraw-table td {
+          padding: 13px;
+          color: #b8c7d9;
+          font-size: 11px;
+          border-bottom: 1px solid rgba(38, 55, 80, .42);
+          white-space: nowrap;
+        }
+
+        .orbi-withdraw-table tbody tr:last-child td { border-bottom: 0; }
+
+        .orbi-withdraw-status {
+          display: inline-flex;
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .08em;
+        }
+
+        .orbi-withdraw-status.pending {
+          color: #ffd76d;
+          background: rgba(245, 196, 81, .08);
+          border: 1px solid rgba(245, 196, 81, .15);
+        }
+
+        .orbi-withdraw-status.approved {
+          color: #86efac;
+          background: rgba(34, 197, 94, .08);
+          border: 1px solid rgba(34, 197, 94, .15);
+        }
+
+        .orbi-withdraw-status.rejected {
+          color: #ff9b9b;
+          background: rgba(239, 68, 68, .08);
+          border: 1px solid rgba(239, 68, 68, .15);
+        }
+
+        .orbi-empty-section {
+          min-height: 150px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          color: var(--od-muted);
+          text-align: center;
+        }
+
+        .orbi-no-data {
+          border: 1px dashed rgba(38, 55, 80, 0.75);
+          border-radius: 13px;
+        }
+
+        .orbi-level-section {
+          overflow: hidden;
+        }
+
+        .orbi-level-system-pill {
+          flex: 0 0 auto;
+          padding: 7px 10px;
+          border-radius: 999px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .12em;
+          border: 1px solid rgba(139,155,176,.16);
+          background: rgba(139,155,176,.06);
+          color: var(--od-muted);
+        }
+
+        .orbi-level-system-pill.is-on {
+          color: #86efac;
+          border-color: rgba(34,197,94,.2);
+          background: rgba(34,197,94,.07);
+        }
+
+        .orbi-level-table-wrap,
+        .orbi-level-history-wrap {
+          width: 100%;
+          overflow-x: auto;
+          border: 1px solid rgba(38,55,80,.65);
+          border-radius: 12px;
+        }
+
+        .orbi-level-table {
+          width: 100%;
+          min-width: 760px;
+          border-collapse: collapse;
+        }
+
+        .orbi-level-table th {
+          padding: 12px 13px;
+          text-align: left;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          background: rgba(14,21,34,.68);
+          border-bottom: 1px solid rgba(38,55,80,.65);
+          white-space: nowrap;
+        }
+
+        .orbi-level-table td {
+          padding: 13px;
+          color: #b8c7d9;
+          font-size: 11px;
+          border-bottom: 1px solid rgba(38,55,80,.42);
+          white-space: nowrap;
+        }
+
+        .orbi-level-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .orbi-level-table tbody tr.is-unlocked {
+          background: rgba(22,140,255,.035);
+        }
+
+        .orbi-level-table td strong {
+          color: #eef4fb;
+        }
+
+        .orbi-level-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .08em;
+        }
+
+        .orbi-level-status > span {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          display: inline-block;
+        }
+
+        .orbi-level-status.unlocked {
+          color: #86efac;
+          background: rgba(34,197,94,.08);
+          border: 1px solid rgba(34,197,94,.15);
+        }
+
+        .orbi-level-status.unlocked > span {
+          background: #22c55e;
+          box-shadow: 0 0 8px rgba(34,197,94,.55);
+        }
+
+        .orbi-level-status.locked {
+          color: #8fa0b5;
+          background: rgba(139,155,176,.06);
+          border: 1px solid rgba(139,155,176,.12);
+        }
+
+        .orbi-level-status.locked > span {
+          background: #718096;
+        }
+
+        .orbi-level-history-wrap {
+          max-height: 520px;
+          overflow-y: auto;
+        }
+
+        .orbi-level-history-wrap .orbi-level-table thead th {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+        }
+
+        .orbi-empty-section {
+          min-height: 420px;
+          border: 1px solid var(--od-border);
+          border-radius: 18px;
+          background: rgba(10, 15, 24, 0.7);
+          padding: 40px;
+        }
+
+        .orbi-empty-icon {
+          width: 58px;
+          height: 58px;
+          display: grid;
+          place-items: center;
+          border-radius: 16px;
+          color: #8fc9ff;
+          background: rgba(22, 140, 255, 0.08);
+          border: 1px solid rgba(22, 140, 255, 0.15);
+        }
+
+        .orbi-empty-section h2 {
+          margin: 4px 0 0;
+        }
+
+        .orbi-empty-section p {
+          max-width: 520px;
+          margin: 0;
+          color: var(--od-muted);
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        @media (max-width: 1180px) {
+          .orbi-package-overview-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-package-grid-page {
+            grid-template-columns: minmax(0, 1fr);
+          }
+          .orbi-stat-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-package-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .orbi-two-column {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 850px) {
+          .orbi-emergency-overview {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-emergency-package {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .orbi-emergency-package-badge {
+            justify-self: start;
+          }
+          .orbi-sidebar {
+            transform: translateX(-100%);
+            transition: transform 220ms ease;
+            box-shadow: 20px 0 50px rgba(0, 0, 0, 0.3);
+          }
+
+          .orbi-sidebar.open {
+            transform: translateX(0);
+          }
+
+          .orbi-mobile-top {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 15px;
+            margin: -1px -1px 22px;
+            border-bottom: 1px solid var(--od-border);
+            background: rgba(3, 5, 8, 0.92);
+            backdrop-filter: blur(18px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+          }
+
+          .orbi-mobile-brand {
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+          }
+
+          .orbi-mobile-menu {
+            width: 40px;
+            height: 40px;
+            display: grid;
+            place-items: center;
+            border: 1px solid var(--od-border);
+            border-radius: 10px;
+            background: rgba(14, 21, 34, 0.9);
+            color: #fff;
+          }
+
+          .orbi-main {
+            width: 100%;
+            margin-left: 0;
+            padding: 0 16px 35px;
+          }
+
+          .orbi-welcome {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+        }
+
+        .orbi-package-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .orbi-stake-btn {
+          min-height: 46px;
+          border: 1px solid rgba(115, 87, 255, 0.35);
+          border-radius: 12px;
+          padding: 0 18px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          color: #fff;
+          font-weight: 800;
+          background: linear-gradient(135deg, #168cff, #7357ff);
+          box-shadow: 0 12px 30px rgba(22, 140, 255, 0.18);
+          cursor: pointer;
+          transition: 180ms ease;
+        }
+
+        .orbi-stake-btn:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 16px 36px rgba(22, 140, 255, 0.25);
+        }
+
+        .orbi-stake-btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .orbi-emergency-eyebrow {
+          color: #ff9b9b;
+        }
+
+        .orbi-emergency-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: var(--od-danger);
+          box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
+        }
+
+        .orbi-emergency-art {
+          color: #ffb0b0;
+          background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(115, 87, 255, 0.08));
+          border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .orbi-emergency-overview {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .orbi-emergency-overview > div {
+          min-height: 112px;
+          padding: 15px;
+          border: 1px solid var(--od-border);
+          border-radius: 14px;
+          background: linear-gradient(145deg, rgba(13, 22, 37, 0.96), rgba(7, 12, 21, 0.88));
+        }
+
+        .orbi-emergency-overview span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-emergency-overview strong {
+          display: block;
+          margin-top: 9px;
+          font-size: 22px;
+          letter-spacing: -0.03em;
+        }
+
+        .orbi-emergency-overview small {
+          display: block;
+          margin-top: 5px;
+          color: var(--od-muted);
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .orbi-emergency-status-value.eligible {
+          color: #fca5a5;
+        }
+
+        .orbi-emergency-action-card {
+          border-color: rgba(239, 68, 68, 0.2);
+          box-shadow: 0 18px 55px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(239, 68, 68, 0.06);
+        }
+
+        .orbi-emergency-warning {
+          display: flex;
+          align-items: flex-start;
+          gap: 11px;
+          padding: 13px;
+          border: 1px solid rgba(239, 68, 68, 0.22);
+          border-radius: 12px;
+          color: #fecaca;
+          background: rgba(239, 68, 68, 0.055);
+        }
+
+        .orbi-emergency-warning svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .orbi-emergency-warning strong,
+        .orbi-emergency-warning span {
+          display: block;
+        }
+
+        .orbi-emergency-warning strong {
+          font-size: 12px;
+        }
+
+        .orbi-emergency-warning span {
+          margin-top: 3px;
+          color: #d7a4a4;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .orbi-emergency-rules {
+          display: grid;
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .orbi-emergency-rules > div {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+          padding: 10px 11px;
+          border: 1px solid rgba(38, 55, 80, 0.65);
+          border-radius: 10px;
+          background: rgba(14, 21, 34, 0.45);
+        }
+
+        .orbi-emergency-rules > div > span {
+          width: 28px;
+          height: 28px;
+          flex: 0 0 auto;
+          display: grid;
+          place-items: center;
+          border-radius: 8px;
+          color: #ffb4b4;
+          border: 1px solid rgba(239, 68, 68, 0.18);
+          background: rgba(239, 68, 68, 0.07);
+          font-size: 8px;
+          font-weight: 900;
+        }
+
+        .orbi-emergency-rules b,
+        .orbi-emergency-rules small {
+          display: block;
+        }
+
+        .orbi-emergency-rules b {
+          color: #eaf0f7;
+          font-size: 11px;
+        }
+
+        .orbi-emergency-rules small {
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          line-height: 1.4;
+        }
+
+        .orbi-emergency-submit {
+          width: 100%;
+          min-height: 50px;
+          margin-top: 16px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 1px solid rgba(239, 68, 68, 0.35);
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(153, 27, 27, 0.95));
+          font-size: 13px;
+          font-weight: 900;
+          cursor: pointer;
+          box-shadow: 0 14px 32px rgba(127, 29, 29, 0.2);
+          transition: 180ms ease;
+        }
+
+        .orbi-emergency-submit:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 17px 38px rgba(127, 29, 29, 0.28);
+        }
+
+        .orbi-emergency-submit:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .orbi-emergency-lifecycle {
+          gap: 8px;
+        }
+
+        .orbi-emergency-package-list {
+          display: grid;
+          gap: 9px;
+        }
+
+        .orbi-emergency-package {
+          display: grid;
+          grid-template-columns: 0.8fr 1fr 1fr 1.15fr 1.15fr auto;
+          align-items: center;
+          gap: 10px;
+          padding: 13px;
+          border: 1px solid rgba(38, 55, 80, 0.75);
+          border-radius: 12px;
+          background: rgba(6, 10, 17, 0.55);
+        }
+
+        .orbi-emergency-package.eligible {
+          border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .orbi-emergency-package > div > span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 7px;
+          font-weight: 800;
+          letter-spacing: 0.11em;
+        }
+
+        .orbi-emergency-package b {
+          display: block;
+          margin-top: 4px;
+          font-size: 11px;
+        }
+
+        .orbi-emergency-package-badge {
+          justify-self: end;
+          padding: 5px 8px;
+          border-radius: 999px;
+          font-size: 7px !important;
+          font-weight: 900 !important;
+          letter-spacing: 0.1em !important;
+          white-space: nowrap;
+        }
+
+        .orbi-emergency-package-badge.eligible {
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.18);
+          background: rgba(239, 68, 68, 0.07);
+        }
+
+        .orbi-emergency-package-badge.locked {
+          color: #aebbd0;
+          border: 1px solid rgba(139, 155, 176, 0.13);
+          background: rgba(139, 155, 176, 0.06);
+        }
+
+        .orbi-emergency-confirm-box {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-top: 18px;
+          padding: 13px;
+          border: 1px solid rgba(239, 68, 68, 0.24);
+          border-radius: 12px;
+          color: #fecaca;
+          background: rgba(239, 68, 68, 0.06);
+        }
+
+        .orbi-emergency-confirm-box strong,
+        .orbi-emergency-confirm-box p {
+          display: block;
+        }
+
+        .orbi-emergency-confirm-box strong {
+          font-size: 12px;
+        }
+
+        .orbi-emergency-confirm-box p {
+          margin: 4px 0 0;
+          color: #d7a4a4;
+          font-size: 10px;
+          line-height: 1.5;
+        }
+
+        .orbi-modal-secondary {
+          width: 100%;
+          min-height: 45px;
+          margin-top: 9px;
+          border: 1px solid var(--od-border);
+          border-radius: 11px;
+          color: var(--od-muted);
+          background: rgba(255, 255, 255, 0.025);
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .orbi-modal-secondary:hover:not(:disabled) {
+          color: #fff;
+          border-color: var(--od-border-light);
+        }
+
+        .orbi-modal-secondary:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+
+        .orbi-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 10000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          overflow-y: auto;
+          background: rgba(0, 0, 0, 0.76);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
+        .orbi-modal {
+          position: relative;
+          z-index: 10001;
+          width: min(560px, calc(100vw - 32px));
+          max-height: calc(100vh - 48px);
+          overflow-y: auto;
+          margin: auto;
+          padding: 24px;
+          border: 1px solid var(--od-border-light);
+          border-radius: 20px;
+          background: linear-gradient(180deg, #0d1420 0%, #080d15 100%);
+          box-shadow: 0 30px 100px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(22, 140, 255, 0.06);
+        }
+
+        .orbi-modal-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+        }
+
+        .orbi-modal-head h2 {
+          margin: 7px 0 7px;
+          font-size: 26px;
+          line-height: 1.1;
+        }
+
+        .orbi-modal-head p {
+          margin: 0;
+          color: var(--od-muted);
+          font-size: 13px;
+          line-height: 1.55;
+          max-width: 430px;
+        }
+
+        .orbi-modal-close {
+          width: 38px;
+          height: 38px;
+          flex: 0 0 auto;
+          display: grid;
+          place-items: center;
+          border: 1px solid var(--od-border);
+          border-radius: 10px;
+          color: var(--od-muted);
+          background: rgba(255,255,255,0.025);
+          cursor: pointer;
+        }
+
+        .orbi-modal-close:hover:not(:disabled) {
+          color: #fff;
+          border-color: var(--od-border-light);
+        }
+
+        .orbi-modal-close:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .orbi-modal-balance {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 22px;
+        }
+
+        .orbi-modal-balance > div {
+          padding: 14px;
+          border: 1px solid var(--od-border);
+          border-radius: 13px;
+          background: rgba(255,255,255,0.02);
+        }
+
+        .orbi-modal-balance span,
+        .orbi-modal-field label,
+        .orbi-modal-label-row button {
+          color: var(--od-muted-2);
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-modal-balance strong {
+          display: block;
+          margin-top: 6px;
+          color: #fff;
+          font-size: 18px;
+        }
+
+        .orbi-modal-field {
+          margin-top: 20px;
+        }
+
+        .orbi-modal-label-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+        }
+
+        .orbi-modal-label-row button {
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: #6eb8ff;
+          cursor: pointer;
+        }
+
+        .orbi-modal-label-row button:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .orbi-amount-input-wrap {
+          display: flex;
+          align-items: center;
+          min-height: 60px;
+          padding: 0 16px;
+          gap: 10px;
+          border: 1px solid #29405e;
+          border-radius: 13px;
+          background: #070c14;
+          box-shadow: inset 0 0 0 1px rgba(22, 140, 255, 0.03);
+        }
+
+        .orbi-amount-input-wrap > span:first-child {
+          color: #8fa4bd;
+          font-size: 21px;
+          font-weight: 700;
+        }
+
+        .orbi-amount-input-wrap input {
+          width: 100%;
+          min-width: 0;
+          border: 0;
+          outline: 0;
+          color: #fff;
+          background: transparent;
+          font-size: 23px;
+          font-weight: 800;
+        }
+
+        .orbi-amount-input-wrap input::placeholder {
+          color: #41536a;
+        }
+
+        .orbi-amount-input-wrap > span:last-child {
+          flex: 0 0 auto;
+          color: #6f8198;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+        }
+
+        .orbi-modal-field > small {
+          display: block;
+          margin-top: 8px;
+          color: var(--od-muted-2);
+          font-size: 11px;
+        }
+
+        .orbi-transaction-steps {
+          display: grid;
+          gap: 9px;
+          margin-top: 20px;
+        }
+
+        .orbi-transaction-steps > div {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px;
+          border: 1px solid var(--od-border);
+          border-radius: 12px;
+          background: rgba(255,255,255,0.018);
+        }
+
+        .orbi-transaction-steps > div > span {
+          width: 30px;
+          height: 30px;
+          flex: 0 0 auto;
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          color: #9fb1c5;
+          background: #101a28;
+          border: 1px solid #263a53;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .orbi-transaction-steps > div.current {
+          border-color: rgba(22, 140, 255, 0.45);
+          background: rgba(22, 140, 255, 0.055);
+        }
+
+        .orbi-transaction-steps > div.current > span {
+          color: #fff;
+          border-color: rgba(22, 140, 255, 0.6);
+          background: rgba(22, 140, 255, 0.2);
+        }
+
+        .orbi-transaction-steps > div.done > span {
+          color: #fff;
+          border-color: rgba(34, 197, 94, 0.45);
+          background: rgba(34, 197, 94, 0.14);
+        }
+
+        .orbi-transaction-steps strong {
+          display: block;
+          color: #eef4fb;
+          font-size: 13px;
+        }
+
+        .orbi-transaction-steps small {
+          display: block;
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .orbi-modal-message {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          margin-top: 14px;
+          padding: 11px 12px;
+          border: 1px solid rgba(239, 68, 68, 0.2);
+          border-radius: 10px;
+          color: #ffb4b4;
+          background: rgba(239, 68, 68, 0.06);
+          font-size: 12px;
+          line-height: 1.45;
+          word-break: break-word;
+        }
+
+        .orbi-modal-tx {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 11px;
+          color: #72bcff;
+          font-size: 11px;
+          text-decoration: none;
+        }
+
+        .orbi-modal-submit {
+          width: 100%;
+          min-height: 52px;
+          margin-top: 18px;
+          border: 0;
+          border-radius: 12px;
+          color: #fff;
+          background: linear-gradient(135deg, #168cff, #7357ff);
+          font-size: 14px;
+          font-weight: 900;
+          cursor: pointer;
+          box-shadow: 0 14px 34px rgba(22, 140, 255, 0.2);
+        }
+
+        .orbi-modal-submit:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .orbi-modal-note {
+          margin: 12px 0 0;
+          color: var(--od-muted-2);
+          text-align: center;
+          font-size: 10px;
+          line-height: 1.5;
+        }
+
+        .orbi-settings-card {
+          min-height: 100%;
+        }
+
+        .orbi-settings-overview .orbi-stat {
+          min-height: 132px;
+        }
+
+        .orbi-settings-list {
+          display: flex;
+          flex-direction: column;
+          border-top: 1px solid rgba(38, 55, 80, 0.45);
+        }
+
+        .orbi-settings-row {
+          min-height: 72px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 13px 0;
+          border-bottom: 1px solid rgba(38, 55, 80, 0.42);
+        }
+
+        .orbi-settings-row:last-child {
+          border-bottom: 0;
+        }
+
+        .orbi-settings-row > div:first-child {
+          min-width: 0;
+        }
+
+        .orbi-settings-row span {
+          display: block;
+          color: var(--od-muted-2);
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+        }
+
+        .orbi-settings-row strong {
+          display: block;
+          margin-top: 5px;
+          font-size: 13px;
+          font-weight: 750;
+          overflow-wrap: anywhere;
+        }
+
+        .orbi-settings-row small {
+          display: block;
+          margin-top: 4px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          overflow-wrap: anywhere;
+        }
+
+        .orbi-settings-value-right {
+          flex: 0 0 auto;
+          min-width: 125px;
+          text-align: right;
+        }
+
+        .orbi-settings-address-row {
+          align-items: center;
+        }
+
+        .orbi-settings-actions {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          flex: 0 0 auto;
+        }
+
+        .orbi-settings-actions .orbi-copy-btn,
+        .orbi-settings-address-row > .orbi-copy-btn {
+          min-height: 34px;
+          padding: 0 10px;
+          font-size: 10px;
+        }
+
+        .orbi-settings-success {
+          color: #86efac !important;
+        }
+
+        .orbi-settings-danger {
+          color: #fca5a5 !important;
+        }
+
+        .orbi-settings-feature-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .orbi-settings-feature {
+          min-height: 72px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 13px;
+          border: 1px solid var(--od-border);
+          border-radius: 12px;
+          background: rgba(8, 13, 21, 0.55);
+        }
+
+        .orbi-settings-feature-dot {
+          width: 8px;
+          height: 8px;
+          flex: 0 0 8px;
+          border-radius: 50%;
+        }
+
+        .orbi-settings-feature-dot.enabled {
+          background: var(--od-success);
+          box-shadow: 0 0 11px rgba(34, 197, 94, 0.6);
+        }
+
+        .orbi-settings-feature-dot.disabled {
+          background: #64748b;
+        }
+
+        .orbi-settings-feature > div {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .orbi-settings-feature strong {
+          display: block;
+          font-size: 12px;
+        }
+
+        .orbi-settings-feature small {
+          display: block;
+          margin-top: 3px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+        }
+
+        .orbi-settings-feature > b {
+          font-size: 9px;
+          letter-spacing: 0.12em;
+        }
+
+        .orbi-settings-feature > b.enabled {
+          color: #86efac;
+        }
+
+        .orbi-settings-feature > b.disabled {
+          color: var(--od-muted-2);
+        }
+
+        .orbi-settings-loading {
+          min-height: 76px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          color: var(--od-muted);
+          font-size: 12px;
+        }
+
+        .orbi-settings-disconnect {
+          width: 100%;
+          min-height: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border: 1px solid rgba(239, 68, 68, 0.28);
+          border-radius: 11px;
+          background: rgba(239, 68, 68, 0.055);
+          color: #fca5a5;
+          font-weight: 750;
+          transition: 180ms ease;
+        }
+
+        .orbi-settings-disconnect:hover {
+          border-color: rgba(239, 68, 68, 0.45);
+          background: rgba(239, 68, 68, 0.09);
+          color: #fff;
+        }
+
+        .orbi-settings-session-note {
+          display: block;
+          margin-top: 9px;
+          color: var(--od-muted-2);
+          font-size: 9px;
+          line-height: 1.5;
+        }
+
+        .orbi-mobile-overlay {
+          display: none;
+        }
+
+        @media (max-width: 1024px) {
+          .orbi-main {
+            padding-left: 24px;
+            padding-right: 24px;
+          }
+
+          .orbi-stat-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .orbi-two-column {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 850px) {
+          .orbi-mobile-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 45;
+            display: block;
+            border: 0;
+            padding: 0;
+            background: rgba(0, 0, 0, 0.58);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+          }
+
+          .orbi-sidebar {
+            width: min(290px, 84vw);
+          }
+
+          .orbi-mobile-top {
+            margin-left: -16px;
+            margin-right: -16px;
+          }
+
+          .orbi-welcome h1 {
+            font-size: clamp(28px, 6vw, 38px);
+          }
+
+          .orbi-connect-panel {
+            min-height: 0;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .orbi-package-overview-grid,
+          .orbi-package-grid-page,
+          .orbi-package-detail-row,
+          .orbi-package-meta-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-stat-grid,
+          .orbi-package-grid,
+          .orbi-balance-grid,
+          .orbi-network-grid,
+          .orbi-activity-grid,
+          .orbi-achievement-row,
+          .orbi-achievement-wallets {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-connect-panel {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .orbi-primary-btn {
+            width: 100%;
+          }
+
+          .orbi-package-actions {
+            width: 100%;
+            justify-content: stretch;
+          }
+
+          .orbi-package-actions > button {
+            flex: 1 1 100%;
+            width: 100%;
+          }
+
+          .orbi-modal-backdrop {
+            align-items: flex-end;
+            padding: 10px;
+          }
+
+          .orbi-modal {
+            width: 100%;
+            max-height: calc(100vh - 20px);
+            padding: 18px;
+            border-radius: 18px;
+          }
+
+          .orbi-modal-balance {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-wallet-bar,
+          .orbi-activity-foot {
+            align-items: flex-start;
+            flex-direction: column;
+            padding-top: 12px;
+            padding-bottom: 12px;
+          }
+
+          .orbi-package-stats {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .orbi-withdraw-preview,
+          .orbi-withdraw-rules {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-referral-row {
+            flex-direction: column;
+          }
+
+          .orbi-settings-feature-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-settings-row {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .orbi-settings-value-right {
+            min-width: 0;
+            text-align: left;
+          }
+
+          .orbi-settings-address-row {
+            flex-direction: column;
+          }
+
+          .orbi-settings-actions {
+            width: 100%;
+          }
+
+          .orbi-settings-actions .orbi-copy-btn,
+          .orbi-settings-address-row > .orbi-copy-btn {
+            flex: 1;
+            width: 100%;
+          }
+
+          .orbi-copy-btn {
+            width: 100%;
+          }
+
+          .orbi-card {
+            padding: 16px;
+          }
+          .orbi-main {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 28px;
+          }
+
+          .orbi-welcome {
+            margin-bottom: 18px;
+            gap: 14px;
+          }
+
+          .orbi-welcome h1 {
+            font-size: clamp(25px, 8vw, 34px);
+            line-height: 1.08;
+          }
+
+          .orbi-welcome p {
+            font-size: 12px;
+          }
+
+          .orbi-refresh-btn {
+            width: 100%;
+          }
+
+          .orbi-wallet-bar {
+            padding: 12px 13px;
+          }
+
+          .orbi-wallet-left {
+            min-width: 0;
+          }
+
+          .orbi-wallet-left strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 190px;
+          }
+
+          .orbi-stat {
+            min-height: 125px;
+            padding: 15px;
+          }
+
+          .orbi-stat-icon {
+            margin-bottom: 13px;
+          }
+
+          .orbi-stat-value {
+            font-size: 22px;
+          }
+
+          .orbi-card {
+            padding: 15px;
+            border-radius: 14px;
+          }
+
+          .orbi-card-head {
+            margin-bottom: 14px;
+          }
+
+          .orbi-card h2 {
+            font-size: 17px;
+          }
+
+          .orbi-mobile-brand {
+            color: #fff;
+            text-shadow: 0 0 18px rgba(22,140,255,0.28);
+          }
+
+        }
+
+        @media (max-width: 420px) {
+          .orbi-stat-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-package-stats {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-balance-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .orbi-welcome h1 {
+            font-size: 27px;
+          }
+
+          .orbi-wallet-left strong {
+            max-width: 150px;
+          }
+        }
+      `}</style>
+
+      <aside className={`orbi-sidebar ${mobileOpen ? "open" : ""}`}>
+        <div className="orbi-brand">
+          <div className="orbi-brand-logo-wrap">
+            <img
+              src="/orbi-logo.png"
+              alt="ORBI WORLD"
+              className="orbi-brand-logo"
+            />
+          </div>
+        </div>
+
+        <nav className="orbi-nav">
+          {navItems.map((item) => (
+            <button
+              key={item.label}
+              className={`orbi-nav-button ${
+                activeNav === item.label ? "active" : ""
+              } ${item.danger ? "danger" : ""}`}
+              onClick={() => {
+                setActiveNav(item.label);
+                setMobileOpen(false);
+              }}
+            >
+              <Icon name={item.icon} size={18} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+
+          <div className="orbi-nav-divider" />
+
+          {utilityItems.map((item) => (
+            <button
+              key={item.label}
+              className={`orbi-nav-button ${
+                activeNav === item.label ? "active" : ""
+              }`}
+              onClick={() => {
+                setActiveNav(item.label);
+                setMobileOpen(false);
+              }}
+            >
+              <Icon name={item.icon} size={18} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="orbi-sidebar-bottom">
+          ORBI WORLD<br />
+          BNB SMART CHAIN TESTNET
+        </div>
+      </aside>
+
+      {mobileOpen && (
+        <button
+          type="button"
+          className="orbi-mobile-overlay"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close navigation"
+        />
+      )}
+
+      <section className="orbi-main">
+        <div className="orbi-mobile-top">
+          <span className="orbi-mobile-brand">ORBI WORLD</span>
+          <button
+            className="orbi-mobile-menu"
+            onClick={() => setMobileOpen((value) => !value)}
+            aria-label="Toggle navigation"
+          >
+            <Icon name={mobileOpen ? "close" : "menu"} size={20} />
+          </button>
+        </div>
+
+        <div className="orbi-main-inner">{renderMain()}</div>
+      </section>
+
+      {stakeModalOpen && (
+        <div
+          className="orbi-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeStakeModal();
+          }}
+        >
+          <div
+            className="orbi-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orbi-stake-modal-title"
+          >
+            <div className="orbi-modal-head">
+              <div>
+                <span className="orbi-section-kicker">ON-CHAIN STAKING</span>
+                <h2 id="orbi-stake-modal-title">
+                  {user.status === BigInt(USER_STATUS.ACTIVE)
+                    ? "Top Up Package"
+                    : "Account Activation"}
+                </h2>
+                <p>
+                  {user.status === BigInt(USER_STATUS.ACTIVE)
+                    ? "Add MOCUSDT to create another package on-chain."
+                    : "Activate your ORBI WORLD account with your first package."}
+                </p>
+              </div>
+              <button
+                className="orbi-modal-close"
+                onClick={closeStakeModal}
+                disabled={stakeBusy}
+                aria-label="Close staking modal"
+              >
+                <Icon name="close" size={20} />
+              </button>
+            </div>
+
+            <div className="orbi-modal-balance">
+              <div>
+                <span>MOCUSDT AVAILABLE</span>
+                <strong>${formatUsdt(usdtBalance)}</strong>
+              </div>
+              <div>
+                <span>MINIMUM</span>
+                <strong>${formatUsdt(minimumStake)}</strong>
+              </div>
+            </div>
+
+            <div className="orbi-modal-field">
+              <div className="orbi-modal-label-row">
+                <label htmlFor="orbi-stake-amount">AMOUNT</label>
+                <button
+                  type="button"
+                  onClick={() => setStakeAmount(ethers.formatUnits(usdtBalance, 18))}
+                  disabled={stakeBusy || usdtBalance <= 0n}
+                >
+                  MAX
+                </button>
+              </div>
+              <div className="orbi-amount-input-wrap">
+                <span>$</span>
+                <input
+                  id="orbi-stake-amount"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  placeholder="0.00"
+                  value={stakeAmount}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (/^\d*(?:\.\d{0,18})?$/.test(value)) {
+                      setStakeAmount(value);
+                      setStakeMessage("");
+                    }
+                  }}
+                  disabled={stakeBusy}
+                />
+                <span>MOCUSDT</span>
+              </div>
+              <small>
+                Available: ${formatUsdt(usdtBalance)} · Minimum: ${formatUsdt(minimumStake)}
+              </small>
+            </div>
+
+            <div className="orbi-transaction-steps">
+              <div className={stakeStep === "approving" ? "current" : stakeStep === "staking" ? "done" : ""}>
+                <span>1</span>
+                <div>
+                  <strong>MOCUSDT Approval</strong>
+                  <small>Allow ORBI WORLD to use the selected amount.</small>
+                </div>
+              </div>
+              <div className={stakeStep === "staking" ? "current" : ""}>
+                <span>2</span>
+                <div>
+                  <strong>
+                    {user.status === BigInt(USER_STATUS.ACTIVE)
+                      ? "Create Top-Up Package"
+                      : "Activate Account"}
+                  </strong>
+                  <small>Confirm the ORBI WORLD transaction in your wallet.</small>
+                </div>
+              </div>
+            </div>
+
+            {stakeMessage && (
+              <div className="orbi-modal-message">
+                <Icon name="alert" size={16} />
+                <span>{stakeMessage}</span>
+              </div>
+            )}
+
+            {stakeTxHash && (
+              <a
+                className="orbi-modal-tx"
+                href={`${BLOCK_EXPLORER}/tx/${stakeTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View transaction on BscScan <Icon name="external" size={13} />
+              </a>
+            )}
+
+            <button
+              className="orbi-modal-submit"
+              onClick={submitStake}
+              disabled={stakeBusy || !stakeAmount || usdtBalance <= 0n}
+            >
+              {stakeBusy
+                ? stakeStep === "approving"
+                  ? "Waiting for Approval..."
+                  : "Waiting for Confirmation..."
+                : user.status === BigInt(USER_STATUS.ACTIVE)
+                  ? "Approve & Top Up"
+                  : "Approve & Stake"}
+            </button>
+
+            <p className="orbi-modal-note">
+              You will be asked to confirm each blockchain transaction in your connected wallet.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {emergencyConfirmOpen && (
+        <div
+          className="orbi-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !emergencyBusy) {
+              setEmergencyConfirmOpen(false);
+            }
+          }}
+        >
+          <div
+            className="orbi-modal orbi-emergency-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orbi-emergency-modal-title"
+          >
+            <div className="orbi-modal-head">
+              <div>
+                <span className="orbi-section-kicker orbi-emergency-eyebrow-text">
+                  PERMANENT ACTION
+                </span>
+                <h2 id="orbi-emergency-modal-title">Confirm Emergency Exit</h2>
+                <p>
+                  You are about to permanently close all active packages. The
+                  smart contract will transfer the eligible emergency amount
+                  to your wallet.
+                </p>
+              </div>
+              <button
+                className="orbi-modal-close"
+                onClick={() => setEmergencyConfirmOpen(false)}
+                disabled={emergencyBusy}
+                aria-label="Close Emergency Exit confirmation"
+              >
+                <Icon name="close" size={20} />
+              </button>
+            </div>
+
+            <div className="orbi-modal-balance">
+              <div>
+                <span>ELIGIBLE PACKAGES</span>
+                <strong>{emergencyEligiblePackages.length}</strong>
+              </div>
+              <div>
+                <span>ESTIMATED RETURN</span>
+                <strong>${formatUsdt(emergencyReturn)}</strong>
+              </div>
+            </div>
+
+            <div className="orbi-emergency-confirm-box">
+              <Icon name="alert" size={20} />
+              <div>
+                <strong>Important</strong>
+                <p>
+                  This action is irreversible. All active packages are closed,
+                  your account enters EMERGENCY EXIT status, and the contract
+                  determines the final return amount.
+                </p>
+              </div>
+            </div>
+
+            {emergencyMessage && (
+              <div className="orbi-modal-message">
+                <Icon name="alert" size={16} />
+                <span>{emergencyMessage}</span>
+              </div>
+            )}
+
+            {emergencyTxHash && (
+              <a
+                className="orbi-modal-tx"
+                href={`${BLOCK_EXPLORER}/tx/${emergencyTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View transaction on BscScan
+                <Icon name="external" size={13} />
+              </a>
+            )}
+
+            <button
+              className="orbi-emergency-submit orbi-emergency-confirm-submit"
+              onClick={emergencyCapitalWithdraw}
+              disabled={emergencyBusy}
+            >
+              <Icon name="alert" size={17} />
+              {emergencyBusy
+                ? "Waiting for Confirmation..."
+                : "Confirm & Execute Emergency Exit"}
+            </button>
+
+            <button
+              className="orbi-modal-secondary"
+              onClick={() => setEmergencyConfirmOpen(false)}
+              disabled={emergencyBusy}
+            >
+              Cancel
+            </button>
+
+            <p className="orbi-modal-note">
+              Your wallet will ask you to approve the on-chain Emergency Capital
+              Withdrawal transaction.
+            </p>
+          </div>
+        </div>
+      )}
+    </main>
+  );
 }
 
 function StatCard({
-
-  icon,
-
-  label,
-
-  value,
-
-  meta,
-
+  icon,
+  label,
+  value,
+  meta,
 }: {
-
-  icon: string;
-
-  label: string;
-
-  value: string;
-
-  meta?: string;
-
+  icon: string;
+  label: string;
+  value: string;
+  meta?: string;
 }) {
-
-  return (
-
-    <div className="orbi-stat">
-
-      <div className="orbi-stat-icon">
-
-        <Icon name={icon} size={18} />
-
-      </div>
-
-      <div className="orbi-stat-label">{label}</div>
-
-      <div className="orbi-stat-value">{value}</div>
-
-      {meta ? <div className="orbi-stat-meta">{meta}</div> : null}
-
-    </div>
-
-  );
-
+  return (
+    <div className="orbi-stat">
+      <div className="orbi-stat-icon">
+        <Icon name={icon} size={18} />
+      </div>
+      <div className="orbi-stat-label">{label}</div>
+      <div className="orbi-stat-value">{value}</div>
+      {meta ? <div className="orbi-stat-meta">{meta}</div> : null}
+    </div>
+  );
 }
 
 function IncomeRow({
-
-  label,
-
-  value,
-
+  label,
+  value,
 }: {
-
-  label: string;
-
-  value: bigint;
-
+  label: string;
+  value: bigint;
 }) {
-
-  return (
-
-    <div className="orbi-income-row">
-
-      <span>{label}</span>
-
-      <strong>${formatUsdt(value)}</strong>
-
-    </div>
-
-  );
-
+  return (
+    <div className="orbi-income-row">
+      <span>{label}</span>
+      <strong>${formatUsdt(value)}</strong>
+    </div>
+  );
 }
