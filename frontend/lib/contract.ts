@@ -2,26 +2,26 @@ import { ethers } from "ethers";
 
 /* ================================================================
    ORBI WORLD — CONTRACT CONFIGURATION
-   BNB SMART CHAIN TESTNET
+   BNB SMART CHAIN MAINNET
    ================================================================ */
 
 export const ORBI_WORLD_ADDRESS =
-  "0xAb61170d2D387EcefbF7e6041F7e1817d6FEb836";
+  "0x66Aad6c966C4A4E6B90E72388248A6d21c7944a6";
 
 // ERC20 spender for MOCUSDT approvals. Always use the same canonical
 // deployed ORBI WORLD address; do not duplicate this address in page files.
 export const ORBI_WORLD_SPENDER_ADDRESS = ORBI_WORLD_ADDRESS;
 
 export const MOCUSDT_ADDRESS =
-  "0xDDBb58c032959a07D3be447eEd3643f7782b0581";
+  "0x55d398326f99059fF775485246999027B3197955";
 
-export const BSC_TESTNET_CHAIN_ID = 97;
+export const BSC_TESTNET_CHAIN_ID = 56;
 
 export const BSC_TESTNET_RPC =
-  "https://data-seed-prebsc-1-s1.bnbchain.org:8545";
+  "https://bsc-dataseed.binance.org/";
 
 export const BLOCK_EXPLORER =
-  "https://testnet.bscscan.com";
+  "https://bscscan.com";
 
 
 /* ================================================================
