@@ -10,6 +10,7 @@ import {
   getMocusdtWriteContract,
   getOrbiWorldReadContract,
   getOrbiWorldWriteContract,
+  getReadProvider,
   ORBI_WORLD_SPENDER_ADDRESS,
   isCorrectNetwork,
   parseUSDT,
@@ -595,9 +596,7 @@ export default function Dashboard() {
 
   async function getReadBalance(address: string): Promise<bigint> {
     try {
-      const readProvider = new ethers.JsonRpcProvider(
-        "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
-      );
+      const readProvider = getReadProvider();
       return await readProvider.getBalance(address);
     } catch {
       return 0n;
@@ -7254,7 +7253,7 @@ export default function Dashboard() {
 
         <div className="orbi-sidebar-bottom">
           ORBI WORLD<br />
-          BNB SMART CHAIN TESTNET
+          BNB SMART CHAIN MAINNET
         </div>
       </aside>
 
