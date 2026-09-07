@@ -1136,7 +1136,7 @@ export default function Dashboard() {
         rankContract.MAX_RANK_LEVEL(),
       ]);
 
-      setRankRewardEnabled(Boolean(config?.rankRewardEnabled ?? config?.[0]));
+      setRankRewardEnabled(Boolean(config));
 
       const maxRank = Math.min(20, Math.max(0, Number(toBigInt(maxRankRaw))));
       const requirements: RankRequirementData[] = [];
